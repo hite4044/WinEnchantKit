@@ -1,0 +1,10 @@
+{
+  "id": "mc_record_alert",
+  "name": "Minecraft录屏提示",
+  "author": "hite404",
+  "version": "1.0.0",
+  "main_file": "main.py",
+  "main_class": "Plugin",
+  "desc": "在你游玩Minecraft并忘记录屏时，弹出提示",
+  "requirements": ["pynvml", "psutil", "pywin32"]
+}
