@@ -6,5 +6,5 @@
   "main_file": "main.py",
   "main_class": "Plugin",
   "desc": "提供一个模版, 方便开发者快速开发插件",
-  "requirements": []
+  "requirements": {}
 }

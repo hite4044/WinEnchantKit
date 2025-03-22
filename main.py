@@ -1,24 +1,26 @@
 import asyncio
 import atexit
 import json
+import logging
 from dataclasses import dataclass
 from importlib import import_module
 from os import listdir
-from os.path import join, isfile, basename
+from os.path import join, isfile, basename, exists
 from subprocess import Popen, PIPE
 from sys import executable
 from sys import path
+from sys import argv
 from threading import Thread
+from time import sleep
 from typing import Callable
 
 import pystray
 import wx
 from PIL import Image
-from keyboard import add_hotkey
 
-from gui.config import ConfigEditor
 from base import *
-from lib.log import logger
+from gui.config import ConfigEditor
+from lib.log import logger, get_plugin_logger
 
 
 async def get_packages():
@@ -47,6 +49,7 @@ class PluginInfo:
     main_class: BasePlugin
     state: PluginState
     line: int
+    logger: logging.Logger
 
 
 class ControlPanel(wx.Frame):
@@ -54,6 +57,7 @@ class ControlPanel(wx.Frame):
         super().__init__(parent, size=(850, 450), title="WinEnchantKit管理面板")
         self.packages = get_packages()
         self.plugins: dict[str, PluginInfo] = {}
+        self.auto_launch_plugins: list[str] = []
         self.sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.plugins_lc = wx.ListCtrl(self, style=wx.LC_REPORT)
         self.plugins_lc.InsertColumn(0, "插件ID")
@@ -67,10 +71,12 @@ class ControlPanel(wx.Frame):
         self.start_btn = wx.Button(self.button_panel, label="启动")
         self.stop_btn = wx.Button(self.button_panel, label="停止")
         self.config_btn = wx.Button(self.button_panel, label="配置")
+        self.auto_launch_cb = wx.CheckBox(self.button_panel, label="自动启动")
         self.exit_btn = wx.Button(self.button_panel, label="退出程序")
         self.button_panel.sizer.Add(self.start_btn)
         self.button_panel.sizer.Add(self.stop_btn)
         self.button_panel.sizer.Add(self.config_btn)
+        self.button_panel.sizer.Add(self.auto_launch_cb)
         self.button_panel.sizer.AddStretchSpacer()
         self.button_panel.sizer.Add(self.exit_btn)
         self.button_panel.SetSizer(self.button_panel.sizer)
@@ -81,6 +87,7 @@ class ControlPanel(wx.Frame):
         self.start_btn.Bind(wx.EVT_BUTTON, self.start_plugin_gui)
         self.stop_btn.Bind(wx.EVT_BUTTON, self.stop_plugin_gui)
         self.config_btn.Bind(wx.EVT_BUTTON, self.config_plugin_gui)
+        self.auto_launch_cb.Bind(wx.EVT_CHECKBOX, self.auto_launch_gui)
         self.exit_btn.Bind(wx.EVT_BUTTON, self.on_exit_gui)
         self.plugins_lc.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_item_selected)
         self.Bind(wx.EVT_CLOSE, self.on_close_window)
@@ -94,6 +101,7 @@ class ControlPanel(wx.Frame):
         self.SetIcon(self.window_icon)
         self.create_stray_icon()
         self.Show()
+        self.read_config()
         self.load_all_plugins_gui()
 
     def load_all_plugins_gui(self):
@@ -108,6 +116,19 @@ class ControlPanel(wx.Frame):
             if not self.load_plugin(plugin_dir):
                 logger.error(f"加载插件失败: [{dir_name}]")
         logger.info("加载插件完成")
+        Thread(target=self.auto_start_plugins, daemon=True).start()
+
+    def auto_start_plugins(self):
+        sleep(5)
+        for plugin_id in self.auto_launch_plugins:
+            info = self.plugins[plugin_id]
+            if info.state == PluginState.STOPPED:
+                self.start_plugin(plugin_id)
+                info.state = PluginState.RUNNING
+                self.plugins_lc.SetItem(info.line, 2, "运行中")
+        for index in range(self.plugins_lc.GetItemCount()):
+            item: wx.ListItem = self.plugins_lc.GetItem(index)
+            self.refresh_button_state(item.GetId())
 
     def load_plugin(self, plugin_dir: str):
         if isfile(join(plugin_dir, "plugin.json")):
@@ -116,11 +137,12 @@ class ControlPanel(wx.Frame):
             if not self.inst_plugin_req_gui(plugin_info):
                 return False
             path.append(plugin_dir)
+            plugin_logger = get_plugin_logger(plugin_info["id"], plugin_info["name"])
             module = import_module(f"plugins.{basename(plugin_dir)}.{plugin_info['main_file'].split('.')[0]}")
             main_class: BasePlugin = getattr(module, plugin_info["main_class"])()
             line = self.add_plugin_to_gui(plugin_info)
             self.plugins[plugin_info["id"]] = PluginInfo(plugin_info["id"], plugin_info, main_class,
-                                                         PluginState.STOPPED, line)
+                                                         PluginState.STOPPED, line, plugin_logger)
             return True
         else:
             return False
@@ -132,11 +154,12 @@ class ControlPanel(wx.Frame):
                                               style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_AUTO_HIDE)
             wx.CallAfter(dialog.Pulse)
             wx.CallAfter(dialog.Show)
-            for i, req in enumerate(plugin_info["requirements"]):
+            for i, (req, version) in enumerate(plugin_info["requirements"].items()):
                 dialog.Update(0, msg.format(req, i, len(plugin_info["requirements"])))
                 if req in self.packages:
                     continue
-                result = self.inst_package_thread(req, [])
+                logger.debug(f"安装依赖 {req}")
+                result = self.inst_package_thread(req, version, [])
                 if result is False:
                     wx.CallAfter(dialog.Destroy)
                     wx.MessageBox(f"安装依赖{req}失败，请手动安装依赖后再次尝试", "错误", wx.ICON_ERROR)
@@ -145,8 +168,8 @@ class ControlPanel(wx.Frame):
         return True
 
     @staticmethod
-    def inst_package_thread(package_name: str, result_list: list):
-        proc = Popen([executable, "-m", "pip", "install", package_name], shell=True)
+    def inst_package_thread(package_name: str, version: str, result_list: list):
+        proc = Popen([executable, "-m", "pip", "install", package_name + (version if version else "")], shell=True)
         proc.wait()
         if proc.returncode != 0:
             result_list.append(False)
@@ -182,7 +205,7 @@ class ControlPanel(wx.Frame):
         if event.GetIndex() != -1:
             self.refresh_button_state(event.GetIndex())
 
-    def start_plugin(self, id_: str, start_before_cbk: Callable[[], None]) -> str | None:
+    def start_plugin(self, id_: str, start_before_cbk: Callable[[], None] = lambda: None) -> str | None:
         plugin_info = self.plugins[id_]
         logger.info(f"启动插件: [{plugin_info.info['name']}]")
         try:
@@ -191,6 +214,7 @@ class ControlPanel(wx.Frame):
                 start_before_cbk()
                 plugin_info.main_class.start()
                 plugin_info.state = PluginState.RUNNING
+                plugin_info.main_class.enable = True
                 logger.info(f"插件启动成功: [{plugin_info.info['name']}]")
             else:
                 logger.warning(f"插件 [{plugin_info.info['name']}] 已处于启动状态")
@@ -220,6 +244,7 @@ class ControlPanel(wx.Frame):
                 stop_before_cbk()
                 plugin_info.main_class.stop()
                 plugin_info.state = PluginState.STOPPED
+                plugin_info.main_class.enable = False
                 logger.info(f"插件 [{plugin_info.info['name']}] 已停止")
             else:
                 logger.warning(f"插件 [{plugin_info.info['name']}] 已处于停止状态")
@@ -240,8 +265,20 @@ class ControlPanel(wx.Frame):
             self.plugins_lc.SetItem(self.plugins_lc.GetFocusedItem(), 2, "已停止")
         self.refresh_button_state(item)
 
+    def auto_launch_gui(self, _):
+        item = self.plugins_lc.GetFocusedItem()
+        if item == -1:
+            wx.MessageBox("请选择一个插件", "错误", wx.ICON_ERROR)
+            return
+        plugin_id = self.plugins_lc.GetItemText(item, 0)
+        if plugin_id in self.auto_launch_plugins:
+            self.auto_launch_plugins.remove(plugin_id)
+        else:
+            self.auto_launch_plugins.append(plugin_id)
+        self.refresh_button_state(item)
+
     def refresh_button_state(self, item: int):
-        info = self.plugins[self.plugins_lc.GetItemText(item, 0)]
+        info: PluginInfo = self.plugins[self.plugins_lc.GetItemText(item, 0)]
         if info.state == PluginState.RUNNING:
             self.start_btn.Disable()
             self.stop_btn.Enable()
@@ -254,6 +291,7 @@ class ControlPanel(wx.Frame):
         elif info.state == PluginState.STARTING:
             self.start_btn.Disable()
             self.stop_btn.Disable()
+        self.auto_launch_cb.SetValue(info.id in self.auto_launch_plugins)
 
     def on_close_window(self, event: wx.CloseEvent):
         self.show_or_hide()
@@ -263,6 +301,7 @@ class ControlPanel(wx.Frame):
         if self.has_exited:
             return
         logger.info("正在退出")
+        self.save_config()
         self.stray_icon.stop()
         for plugin_info in self.plugins.values():
             if plugin_info.state == PluginState.RUNNING:
@@ -281,20 +320,40 @@ class ControlPanel(wx.Frame):
 
     def on_exit_gui(self, *_):
         self.Destroy()
-        self.on_exit()
+        Thread(target=self.on_exit).start()
 
     def create_stray_icon(self):
-        menu = pystray.Menu(pystray.MenuItem('显示窗口', self.show_or_hide),
+        menu = pystray.Menu(pystray.MenuItem('显示窗口', self.show_or_hide, default=True),
                             pystray.MenuItem('退出', self.on_exit_gui))
 
         self.stray_icon = pystray.Icon(name='Win Enchant Kit', title="Win Enchant Kit", icon=self.stray_icon_image,
                                        menu=menu)
+
+    def save_config(self):
+        config_fp = r".\config.json"
+        try:
+            with open(config_fp, "w", encoding="utf-8") as f:
+                f.write(json.dumps(self.auto_launch_plugins, indent=4, ensure_ascii=False))
+        except OSError:
+            logger.error("无法保存配置文件")
+
+    def read_config(self):
+        config_fp = r".\config.json"
+        if not exists(config_fp):
+            self.save_config()
+            return
+        try:
+            with open(config_fp, "r", encoding="utf-8") as f:
+                self.auto_launch_plugins = json.loads(f.read())
+        except OSError:
+            logger.error("无法读取配置文件")
 
 
 if __name__ == "__main__":
     app = wx.App()
     frame = ControlPanel(None)
     atexit.register(frame.on_exit)
-    add_hotkey("ctrl+alt+p", frame.show_or_hide)
     frame.Show()
+    if len(argv) > 1 and argv[1] == "-startup":
+        frame.show_or_hide()
     app.MainLoop()

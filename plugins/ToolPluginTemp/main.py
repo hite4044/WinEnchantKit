@@ -3,7 +3,7 @@ import logging
 from base import *
 
 name = "Hite404工具插件模版"
-logger = logging.getLogger("WinEnchantKitLogger")
+logger = logging.getLogger("WinEnchantKitLogger_plugin_temp")
 
 
 class Plugin(BasePlugin):

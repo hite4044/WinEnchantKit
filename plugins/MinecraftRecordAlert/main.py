@@ -12,8 +12,8 @@ from win32process import GetWindowThreadProcessId
 
 from base import *
 
-name = "Minecraft录屏提示"
-logger = logging.getLogger("WinEnchantKitLogger")
+name = "MC录屏提示"
+logger = logging.getLogger("WinEnchantKitLogger_mc_record_alert")
 pynvml.nvmlInit()
 atexit.register(pynvml.nvmlShutdown)
 

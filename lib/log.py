@@ -1,5 +1,6 @@
 import logging
 
+
 class AnsiColorCodes:
     ITALIC = "\033[3m"
     GREEN = "\033[92m"
@@ -9,35 +10,59 @@ class AnsiColorCodes:
     RESET = "\033[0m"
 
 
-class CustomFormatter(logging.Formatter):
-    COLOR_MAP = {
-        logging.DEBUG: AnsiColorCodes.ITALIC,
-        logging.INFO: AnsiColorCodes.GREEN,
-        logging.WARNING: AnsiColorCodes.YELLOW,
-        logging.ERROR: AnsiColorCodes.RED,
-        logging.CRITICAL: AnsiColorCodes.BOLD_RED,
-    }
-    COLOR_MAP.setdefault(0, AnsiColorCodes.RESET)
-    # noinspection SpellCheckingInspection
-    fmt_styles = {
-        "default": "[%(asctime)s.%(msecs)03d] %(module)s:%(lineno)d [%(levelname)s] : %(message)s",
-        "no_time": "%(module)s.py:%(lineno)d [%(levelname)s] : %(message)s",
-    }
-    formatter = logging.Formatter(fmt_styles["default"], datefmt="%y-%m-%d %H:%M:%S")
+NO_TIME_FMT = "%(module)s.py:%(lineno)d [%(levelname)s]"
+# noinspection SpellCheckingInspection
+TIME_FMT = "[%(asctime)s.%(msecs)03d] %(module)s:%(lineno)d [%(levelname)s]"
+GLOBAL_LEVEL = logging.DEBUG
 
-    def update_formatter(self, time_stamp: bool = True):
-        if time_stamp:
-            self.formatter = logging.Formatter(self.fmt_styles["default"], datefmt="%y-%m-%d %H:%M:%S")
+COLOR_MAP = {
+    logging.DEBUG: AnsiColorCodes.ITALIC,
+    logging.INFO: AnsiColorCodes.GREEN,
+    logging.WARNING: AnsiColorCodes.YELLOW,
+    logging.ERROR: AnsiColorCodes.RED,
+    logging.CRITICAL: AnsiColorCodes.BOLD_RED,
+}
+COLOR_MAP.setdefault(0, AnsiColorCodes.RESET)
+
+
+class ColoredFormatter(logging.Formatter):
+
+    def __init__(self):
+        super().__init__()
+        self.formatter = logging.Formatter(NO_TIME_FMT)
+
+    def update_formatter(self, use_time: bool = True):
+        if use_time:
+            self.formatter = logging.Formatter(TIME_FMT, datefmt="%y-%m-%d %H:%M:%S")
         else:
-            self.formatter = logging.Formatter(self.fmt_styles["no_time"])
+            self.formatter = logging.Formatter(NO_TIME_FMT)
 
     def format(self, record):
-        return self.COLOR_MAP.get(record.levelno) + self.formatter.format(record) + AnsiColorCodes.RESET
+        return f"{COLOR_MAP.get(record.levelno)}{self.formatter.format(record)} : {record.message}{AnsiColorCodes.RESET}"
+
+
+class PluginFormatter(ColoredFormatter):
+    def __init__(self, name: str = None):
+        super().__init__()
+        self.name = name
+
+    def format(self, record):
+        return f"{COLOR_MAP.get(record.levelno)}{self.formatter.format(record)} : [{self.name}] {record.message}{AnsiColorCodes.RESET}"
+
+
+def get_plugin_logger(id_: str, name: str):
+    plugin_logger = logging.getLogger(f"WinEnchantKitLogger_{id_}")
+    plugin_logger.setLevel(GLOBAL_LEVEL)
+    plugin_console_handler = logging.StreamHandler()
+    plugin_console_handler.setLevel(GLOBAL_LEVEL)
+    plugin_console_handler.setFormatter(PluginFormatter(name))
+    plugin_logger.addHandler(plugin_console_handler)
+    return plugin_logger
 
 
 logger = logging.getLogger("WinEnchantKitLogger")
-logger.setLevel(logging.DEBUG)
+logger.setLevel(GLOBAL_LEVEL)
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(CustomFormatter())
+console_handler.setLevel(GLOBAL_LEVEL)
+console_handler.setFormatter(ColoredFormatter())
 logger.addHandler(console_handler)
