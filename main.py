@@ -2,6 +2,7 @@ import asyncio
 import atexit
 import json
 import logging
+import typing
 from dataclasses import dataclass
 from importlib import import_module
 from os import listdir
@@ -55,6 +56,7 @@ class PluginInfo:
 class ControlPanel(wx.Frame):
     def __init__(self, parent: wx.Window | None):
         super().__init__(parent, size=(850, 450), title="WinEnchantKit管理面板")
+        self.plugins_config = {}
         self.packages = get_packages()
         self.plugins: dict[str, PluginInfo] = {}
         self.auto_launch_plugins: list[str] = []
@@ -143,6 +145,7 @@ class ControlPanel(wx.Frame):
             line = self.add_plugin_to_gui(plugin_info)
             self.plugins[plugin_info["id"]] = PluginInfo(plugin_info["id"], plugin_info, main_class,
                                                          PluginState.STOPPED, line, plugin_logger)
+            main_class.config.load_values(self.plugins_config[plugin_info["id"]])
             return True
         else:
             return False
@@ -331,20 +334,29 @@ class ControlPanel(wx.Frame):
 
     def save_config(self):
         config_fp = r".\config.json"
+        config_data = {
+            'auto_launch': self.auto_launch_plugins,
+            'plugins': {}
+        }
+        for plugin_id, plugin_info in self.plugins.items():
+            config_data['plugins'][plugin_id] = dict(plugin_info.main_class.config)
         try:
             with open(config_fp, "w", encoding="utf-8") as f:
-                f.write(json.dumps(self.auto_launch_plugins, indent=4, ensure_ascii=False))
+                json.dump(config_data, typing.cast(typing.Any, f), indent=4, ensure_ascii=False)
         except OSError:
             logger.error("无法保存配置文件")
 
     def read_config(self):
         config_fp = r".\config.json"
         if not exists(config_fp):
-            self.save_config()
+            self.save_config()  # 创建空配置
             return
         try:
             with open(config_fp, "r", encoding="utf-8") as f:
-                self.auto_launch_plugins = json.loads(f.read())
+                data = json.load(f)
+                self.auto_launch_plugins = data.get('auto_launch', [])
+                # 加载插件配置
+                self.plugins_config = data.get('plugins', {})
         except OSError:
             logger.error("无法读取配置文件")
 

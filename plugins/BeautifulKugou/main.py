@@ -30,10 +30,10 @@ def right_corner_border_style(hwnd: int):
 
 def blur_behind(hwnd: int, color: tuple[int, int, int, int], enable: bool) -> str | None:
     back_type = DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW if enable else DWM_SYSTEMBACKDROP_TYPE.DWMSBT_NONE
-    accent_state = ACCENT_STATE.ACCENT_ENABLE_BLURBEHIND if enable else ACCENT_STATE.ACCENT_DISABLED
-    color_hex = "".join(map(lambda x: hex(x)[2:].zfill(2), color[:3]))
+    accent_state = ACCENT_STATE.ACCENT_ENABLE_ACRYLICBLURBEHIND if enable else ACCENT_STATE.ACCENT_DISABLED
+    color_hex = "".join(map(lambda x: hex(x)[2:].zfill(2), color[-2::-1]))
     if len(color_hex) != 6:
-        return "颜色格式错误"
+        return "颜色格式错误" + color_hex
 
     # 亚克力背景
     DwmSetWindowAttribute(
@@ -71,8 +71,8 @@ class Plugin(BasePlugin):
             "inv_non_launched": FloatParam(2.0, "检查窗口的间隔时间: "),
             "inv_launched": FloatParam(10.0, "酷狗启动后的检查间隔时间："),
             "blur_behind": BoolParam(True, "是否启用模糊背景："),
-            "blur_color": ColorParam((0x2B, 0x2B, 0x2B), "模糊背景颜色 (不起作用)："),
-            "blur_alpha": IntParam(152, "模糊背景透明度 (不起作用)：")
+            "blur_color": ColorParam((0x2B, 0x2B, 0x2B), "模糊背景颜色："),
+            "blur_alpha": IntParam(152, "模糊背景透明度：")
         }
     )
     enable = False
