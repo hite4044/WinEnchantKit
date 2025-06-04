@@ -41,9 +41,10 @@ def extract_music_title(title: str) -> tuple[str, str | None]:
     return title.strip(), other_name
 
 
-def get_song_list(title: str, artist: str) -> list[dict[str, Any]]:
-    logger.debug(f"歌曲搜索关键字: \"{title} {artist}\"")
-    resp = requests.get(SEARCH_URL.format(keyword=f"{title} {artist}"), headers=HEADERS, data=None)
+def search_for_song_list(title: str, artist: str) -> list[dict[str, Any]]:
+    keyword = f"{title} {artist}"
+    logger.debug(f"歌曲搜索关键字: \"{keyword}\"")
+    resp = requests.get(SEARCH_URL.format(keyword=keyword), headers=HEADERS, data=None)
     if resp.status_code != 200:
         raise RuntimeError(f"搜索失败: 服务器返回HTTP错误码 [{resp.status_code}]")
     resp_json = resp.json()
@@ -53,28 +54,27 @@ def get_song_list(title: str, artist: str) -> list[dict[str, Any]]:
 def search_music(title: str, artist: str, album: str) -> dict[str, Any]:
     """通过给定的歌曲名、歌手、专辑来搜索歌曲"""
     clean_title, other_name = extract_music_title(title)
-    song_list = get_song_list(clean_title, artist)
+    song_list = search_for_song_list(clean_title, artist)
+    ready_songs = []
     for song in song_list:
-        logger.debug(f"匹配歌曲 {song['songname']} - {song['singername']}")
         if all([
             artist in song["singername"],
             clean_title == song["songname_original"],
             other_name is None or other_name in song["songname"]
         ]):
-            break
-    else:
+            logger.debug(f"匹配歌曲 {song['songname']} - {song['singername']}")
+            ready_songs.append(song)
+            for group_song in song["group"] if song.get("group") else []:
+                ready_songs.append(group_song)
+    if not ready_songs:
         raise RuntimeError(f"搜索失败: 找不到对应歌曲 {artist} - {title} 《{album}》")
-    if song["album_name"] == album or not song.get("group") or not album:
-        return song
-
-    song_list = song["group"]
-    for g_song in song_list:
-        logger.debug(f"匹配专辑 {g_song['album_name']}")
-        if g_song["album_name"] == album:
-            return g_song
+    for song in ready_songs:
+        logger.debug(f"匹配专辑 {song['album_name']}")
+        if song["album_name"] == album:
+            return song
     else:
         logger.warning(f"{artist} - {title} 《{album}》 无法找到对应专辑, 使用专辑列表中第一个歌曲")
-        return song
+        return ready_songs[0]
 
 
 def transform_to_url(song_info: dict[str, Any], full_size: bool = False, size: int = 480):

@@ -3,6 +3,7 @@ from typing import Callable
 import wx
 
 from base import *
+from gui.center_text import CenteredText
 
 
 class ColorInputCtrl(wx.Panel):
@@ -57,7 +58,7 @@ class ConfigLine(wx.Panel):
             parent = self
         self.param = param
 
-        self.label = wx.StaticText(parent, label=param.desc)
+        self.label = CenteredText(parent, label=param.desc, x_center=False)
         if param.kind == ParamKind.BOOL:
             self.input = wx.CheckBox(parent)
             self.input.SetValue(value)
@@ -101,7 +102,7 @@ class ConfigEditor(wx.Dialog):
         self.out_sizer = wx.BoxSizer(wx.VERTICAL)
         for name, param in config.params.items():
             if param.kind == ParamKind.TIP:
-                self.out_sizer.Add(wx.StaticText(self, label=param.desc), 0, wx.EXPAND)
+                self.out_sizer.Add(CenteredText(self, label=param.desc, x_center=False), 0, wx.EXPAND)
                 self.out_sizer.AddSpacer(5)
         self.sizer = wx.FlexGridSizer(len(config), 2, 5, 5)
         self.lines: dict[str, ConfigLine] = {}
