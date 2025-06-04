@@ -216,6 +216,7 @@ class ControlPanel(wx.Frame):
             dialog = ConfigEditor(self, plugin_info.main_class.config,
                                   lambda cfg: self.plugin_config_cbk(plugin_info.id, cfg))
             dialog.ShowModal()
+            self.save_config()
 
     def plugin_config_cbk(self, id_: str, config_dict: dict[str, Any]):
         plugin_info = self.plugins[id_]
@@ -326,6 +327,7 @@ class ControlPanel(wx.Frame):
         if self.has_exited:
             return
         logger.info("正在退出")
+        Thread(target=self.on_exit_timeout, daemon=True).start()
         self.save_config()
         self.stray_icon.stop()
         for plugin_info in self.plugins.values():
@@ -333,6 +335,12 @@ class ControlPanel(wx.Frame):
                 self.stop_plugin(plugin_info.id, lambda: None)
         logger.info("再见！")
         self.has_exited = True
+
+    @staticmethod
+    def on_exit_timeout():
+        sleep(4)
+        logger.info("退出时间到达限制 (4s), 触发大保底")
+        exit(0)
 
     def show_or_hide(self):
         if self.IsShown():
@@ -386,7 +394,6 @@ class ControlPanel(wx.Frame):
 if __name__ == "__main__":
     app = wx.App()
     frame = ControlPanel(None)
-    atexit.register(frame.on_exit)
     frame.Show()
     if len(argv) > 1 and argv[1] == "-startup":
         frame.show_or_hide()
