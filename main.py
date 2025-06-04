@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from importlib import import_module
 from os import listdir
 from os.path import join, isfile, basename, exists
+from queue import Queue
 from subprocess import Popen, PIPE
+from sys import argv
 from sys import executable
 from sys import path
-from sys import argv
 from threading import Thread
 from time import sleep
 from typing import Callable
@@ -153,22 +154,39 @@ class ControlPanel(wx.Frame):
     def inst_plugin_req_gui(self, plugin_info: dict[str, Any]):
         if plugin_info["requirements"]:
             msg = "正在安装插件{} ({}/{})，请稍候..."
-            dialog = wx.GenericProgressDialog("安装插件中", msg, 100,
-                                              style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_AUTO_HIDE)
-            wx.CallAfter(dialog.Pulse)
-            wx.CallAfter(dialog.Show)
+            msg_queue = Queue()
+            wx.CallAfter(self.progress_dialog_func, msg, msg_queue)
             for i, (req, version) in enumerate(plugin_info["requirements"].items()):
-                dialog.Update(0, msg.format(req, i, len(plugin_info["requirements"])))
+                msg_queue.put((0, msg.format(req, i, len(plugin_info["requirements"]))))
                 if req in self.packages:
                     continue
                 logger.debug(f"安装依赖 {req}")
                 result = self.inst_package_thread(req, version, [])
                 if result is False:
-                    wx.CallAfter(dialog.Destroy)
+                    msg_queue.put("STOP")
                     wx.MessageBox(f"安装依赖{req}失败，请手动安装依赖后再次尝试", "错误", wx.ICON_ERROR)
                     return False
-            wx.CallAfter(dialog.Destroy)
+            msg_queue.put("STOP")
         return True
+
+    @staticmethod
+    def progress_dialog_func(msg: str, msg_queue: Queue):
+        dialog = wx.GenericProgressDialog("安装插件中", msg, 100,
+                                          style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_AUTO_HIDE)
+        dialog.Pulse()
+
+        def msg_thread():
+            while True:
+                data = msg_queue.get(block=True)
+                if data == "STOP":
+                    wx.CallAfter(dialog.EndModal, wx.ID_OK)
+                    break
+                value, format_args = data
+                wx.CallAfter(dialog.Update, value, msg.format(*format_args))
+
+        Thread(target=msg_thread, daemon=True).start()
+        dialog.ShowModal()
+        dialog.Destroy()
 
     @staticmethod
     def inst_package_thread(package_name: str, version: str, result_list: list):
@@ -219,8 +237,10 @@ class ControlPanel(wx.Frame):
                 plugin_info.state = PluginState.RUNNING
                 plugin_info.main_class.enable = True
                 logger.info(f"插件启动成功: [{plugin_info.info['name']}]")
+                return None
             else:
                 logger.warning(f"插件 [{plugin_info.info['name']}] 已处于启动状态")
+                return None
         except Exception as e:
             plugin_info.state = PluginState.STOPPED
             logger.error(f"启动插件 [{plugin_info.info['name']}] 失败: {str(e)}")
@@ -249,8 +269,10 @@ class ControlPanel(wx.Frame):
                 plugin_info.state = PluginState.STOPPED
                 plugin_info.main_class.enable = False
                 logger.info(f"插件 [{plugin_info.info['name']}] 已停止")
+                return None
             else:
                 logger.warning(f"插件 [{plugin_info.info['name']}] 已处于停止状态")
+                return None
         except Exception as e:
             plugin_info.state = PluginState.RUNNING
             logger.error(f"停止插件 [{plugin_info.info['name']}] 失败: {str(e)}")
