@@ -146,7 +146,8 @@ class ControlPanel(wx.Frame):
             line = self.add_plugin_to_gui(plugin_info)
             self.plugins[plugin_info["id"]] = PluginInfo(plugin_info["id"], plugin_info, main_class,
                                                          PluginState.STOPPED, line, plugin_logger)
-            main_class.config.load_values(self.plugins_config[plugin_info["id"]])
+            if plugin_info["id"] in self.plugins_config:
+                main_class.config.load_values(self.plugins_config[plugin_info["id"]])
             return True
         else:
             return False
