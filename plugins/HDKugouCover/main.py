@@ -1,8 +1,11 @@
+import asyncio
 import json
 import os
 import string
-from os.path import isdir, isfile
-from threading import Event
+from dataclasses import dataclass
+from os import makedirs
+from os.path import isdir, isfile, join, abspath
+from threading import Event, Thread
 
 from winsdk.windows.foundation import Uri
 from winsdk.windows.media import SystemMediaTransportControls as SMTControls, \
@@ -10,12 +13,20 @@ from winsdk.windows.media import SystemMediaTransportControls as SMTControls, \
     SystemMediaTransportControlsButtonPressedEventArgs as SMTCButtonPressedEventArgs, \
     SystemMediaTransportControlsButton as SMTCButton, \
     MediaPlaybackStatus
+from winsdk.windows.storage import StorageFile, FileAccessMode
 from winsdk.windows.storage.streams import RandomAccessStreamReference
 
 from backend import *
 from base import *
 
 name = "高清酷狗封面"
+
+
+@dataclass
+class MusicData:
+    hash: str
+    cover_url: str
+    full_cover_url: str
 
 
 class Plugin(BasePlugin):
@@ -35,7 +46,7 @@ class Plugin(BasePlugin):
         self.sessions: SessionManager = wait_result(SessionManager.request_async())
         self.last_song = None
         self.stop_flag = Event()
-        self.cover_cache: dict[str, (str, str)] = {}
+        self.cover_cache: dict[str, tuple[str, str, str]] = {}
 
         self.sessions_changed_token = None
         self.source_changed_token = None
@@ -51,7 +62,7 @@ class Plugin(BasePlugin):
 
     def load_cache(self):
         try:
-            fp = "cache/kugou_cover_url_cache.json"
+            fp = "cache/kugou_cover_cache.json"
             if not isdir("cache"):
                 os.mkdir("cache")
             if isfile(fp):
@@ -62,7 +73,7 @@ class Plugin(BasePlugin):
 
     def save_cache(self):
         try:
-            fp = "cache/kugou_cover_url_cache.json"
+            fp = "cache/kugou_cover_cache.json"
             if not isdir("cache"):
                 os.mkdir("cache")
             with open(fp, "w+", encoding="utf-8") as f:
@@ -138,16 +149,38 @@ class Plugin(BasePlugin):
 
     def update_info(self, info: SessionMediaProperties):
         logger.info(f"更新歌曲信息: {info.title} - {info.artist}")
-        cover_url, cover_url_full = self.load_cover(info, self.config["cover_size"])
-
-        if cover_url is None:
+        music = self.load_cover(info, self.config["cover_size"])
+        if music is None:
             logger.warning(f"搜索不到歌曲封面, 使用酷狗原封面")
             stream = wait_result(info.thumbnail.open_read_async())
             thumbnail = RandomAccessStreamReference.create_from_stream(stream)
         else:
-            thumbnail = RandomAccessStreamReference.create_from_uri(
-                Uri(cover_url_full if self.config["use_max_size"] else cover_url)
-            )
+            cover_cache_fp = join("cache/covers", f"{music.hash}_full.png" if self.config["use_max_size"] else \
+                f"{music.hash}_{self.config['cover_size']}.png")
+            if not isfile(cover_cache_fp):
+                makedirs("cache/covers", exist_ok=True)
+
+                def cover_save_thread():
+                    resp = requests.get(music.full_cover_url if self.config["use_max_size"] else music.cover_url,
+                                        headers=HEADERS, data=None)
+                    with open(cover_cache_fp, "wb") as f:
+                        f.write(resp.content)
+
+                Thread(target=cover_save_thread).start()
+                uri = music.full_cover_url if self.config["use_max_size"] else music.cover_url
+                thumbnail = RandomAccessStreamReference.create_from_uri(Uri(uri))
+            else:
+                cover_cache_fp = abspath(cover_cache_fp)
+
+                async def load_cover_by_fucking_async():
+                    nonlocal stream
+                    file = await StorageFile.get_file_from_path_async(cover_cache_fp)
+                    stream = await file.open_async(FileAccessMode.READ)
+                    stream_ref = RandomAccessStreamReference.create_from_stream(stream)
+                    return stream_ref
+
+                thumbnail = asyncio.run(load_cover_by_fucking_async())
+
         self.update_smtc_info(info.title, info.artist, info.album_title, info.album_artist, thumbnail)
 
     def update_smtc_info(self, title: str, artist: str, album_title: str, album_artist: str,
@@ -166,7 +199,7 @@ class Plugin(BasePlugin):
     def load_cover(self, info: SessionMediaProperties, size: int = 480):
         song_id = info.title + info.artist + info.album_artist + str(size)
         if song_id in self.cover_cache:
-            cover_url, cover_url_full = self.cover_cache[song_id]
+            song_hash, cover_url, cover_url_full = self.cover_cache[song_id]
         else:
             try:
                 music_name = info.title
@@ -177,10 +210,11 @@ class Plugin(BasePlugin):
                 music_info = search_music(music_name, info.artist, info.album_artist.lstrip("《").rstrip("》"))
                 cover_url = transform_to_url(music_info, False, size)
                 cover_url_full = transform_to_url(music_info, True)
-                self.cover_cache[song_id] = (cover_url, cover_url_full)
+                song_hash = music_info["hash"]
+                self.cover_cache[song_id] = (song_hash, cover_url, cover_url_full)
             except RuntimeError:
-                cover_url = cover_url_full = None
-        return cover_url, cover_url_full
+                return None
+        return MusicData(song_hash, cover_url, cover_url_full)
 
     def on_button_press(self, _, args: SMTCButtonPressedEventArgs):
         if not self.check_source_valid():

@@ -117,4 +117,4 @@ if __name__ == "__main__":
     t_name = "MAGENTA POTION (Extended Mix)"
     t_artist = "EmoCosine"
     t_album = "Love Kills U"
-    music = search_music(t_name, t_artist, t_album)
+    t_music = search_music(t_name, t_artist, t_album)
