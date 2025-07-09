@@ -3,7 +3,7 @@ from threading import Event, Thread
 
 import wx
 from win32.lib import win32con
-from win32gui import SetWindowLong, GetWindowLong
+from win32gui import SetWindowLong, GetWindowLong, GetWindowText
 
 from base import *
 from dwm import *
@@ -28,51 +28,80 @@ def right_corner_border_style(hwnd: int):
     )
 
 
-def blur_behind(hwnd: int, color: tuple[int, int, int, int], enable: bool) -> str | None:
-    back_type = DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW if enable else DWM_SYSTEMBACKDROP_TYPE.DWMSBT_NONE
-    accent_state = ACCENT_STATE.ACCENT_ENABLE_ACRYLICBLURBEHIND if enable else ACCENT_STATE.ACCENT_DISABLED
+def blur_behind(hwnd: int, color: tuple[int, int, int, int],
+                cfg: dict[str, Any]) -> str | None:
+    set_back_type = cfg["set_back_type"]
+    enable_blur_behind = cfg["enable_blur_behind"]
+
+    back_type = cfg["back_type"]
+    accent_state = cfg["accent_state"]
     color_hex = "".join(map(lambda x: hex(x)[2:].zfill(2), color[-2::-1]))
     if len(color_hex) != 6:
         return "颜色格式错误" + color_hex
 
-    # 亚克力背景
-    DwmSetWindowAttribute(
-        hwnd,
-        DWMWINDOWATTRIBUTE.DWMWA_SYSTEMBACKDROP_TYPE,
-        ctypes.byref(ctypes.c_int(back_type)),
-        ctypes.sizeof(ctypes.c_int),
-    )
+    if set_back_type:
+        # 亚克力背景
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWINDOWATTRIBUTE.DWMWA_SYSTEMBACKDROP_TYPE,
+            ctypes.byref(ctypes.c_int(back_type)),
+            ctypes.sizeof(ctypes.c_int),
+        )
 
     # 模糊透明效果
     bb = DWM_BLURBEHIND(
         dwFlags=DWM_BB_ENABLE,
-        fEnable=enable,
+        fEnable=enable_blur_behind,
         hRgnBlur=0,
         fTransitionOnMaximized=False,
     )
     DwmEnableBlurBehindWindow(hwnd, ctypes.byref(bb))
-    accent = ACCENT_POLICY(AccentState=accent_state,
-                           GradientColor=(color[3] << 24) | (int(color_hex, 16) & 0xFFFFFF))
-    attrib = WINDOWCOMPOSITIONATTRIBDATA(
-        Attrib=WINDOWCOMPOSITIONATTRIB.WCA_ACCENT_POLICY,
-        pvData=ctypes.byref(accent),
-        cbData=ctypes.sizeof(accent),
-    )
-    SetWindowCompositionAttribute(hwnd, ctypes.byref(attrib))
+
+    if cfg["enable_set_composition"]:
+        accent = ACCENT_POLICY(AccentState=accent_state,
+                               GradientColor=(color[3] << 24) | (int(color_hex, 16) & 0xFFFFFF))
+        attrib = WINDOWCOMPOSITIONATTRIBDATA(
+            Attrib=WINDOWCOMPOSITIONATTRIB.WCA_ACCENT_POLICY,
+            pvData=ctypes.byref(accent),
+            cbData=ctypes.sizeof(accent),
+        )
+        SetWindowCompositionAttribute(hwnd, ctypes.byref(attrib))
 
     # 拓展标题栏效果至客户区
-    margins = MARGINS(-1, -1, -1, -1) if enable else MARGINS(0, 0, 0, 0)
+    margins = MARGINS(-1, -1, -1, -1) if enable_blur_behind else MARGINS(0, 0, 0, 0)
     DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(margins))
+    return None
 
 
 class Plugin(BasePlugin):
     config = ModuleConfig(
         {
-            "inv_non_launched": FloatParam(2.0, "检查窗口的间隔时间: "),
-            "inv_launched": FloatParam(10.0, "酷狗启动后的检查间隔时间："),
-            "blur_behind": BoolParam(True, "是否启用模糊背景："),
-            "blur_color": ColorParam((0x2B, 0x2B, 0x2B), "模糊背景颜色："),
-            "blur_alpha": IntParam(152, "模糊背景透明度：")
+            "tip": TipParam("有些效果开启又关闭后需重启才能恢复"),
+            "inv_non_launched": FloatParam(2.0, "检查窗口的间隔时间"),
+            "inv_launched": FloatParam(10.0, "酷狗启动后的检查间隔时间"),
+
+            "set_back_type": BoolParam(False, "设置背景材质 (Win 11 22621+)"),
+            "back_type": ChoiceParamPlus(DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW,
+                                         {
+                                             DWM_SYSTEMBACKDROP_TYPE.DWMSBT_NONE: "无",
+                                             DWM_SYSTEMBACKDROP_TYPE.DWMSBT_MAINWINDOW: "Mica (桌面壁纸模糊)",
+                                             DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW: "Acrylic (窗口模糊)",
+                                             DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TABBEDWINDOW: "Mica Alt (桌面壁纸模糊 (更深))"
+                                         }, "背景材质"),
+            "enable_set_composition": BoolParam(False, "设置窗口效果"),
+            "accent_state": ChoiceParamPlus(ACCENT_STATE.ACCENT_ENABLE_ACRYLICBLURBEHIND,
+                                            {
+                                                ACCENT_STATE.ACCENT_DISABLED: "无",
+                                                ACCENT_STATE.ACCENT_ENABLE_ACRYLICBLURBEHIND: "模糊 (带颜色)",
+                                                ACCENT_STATE.ACCENT_ENABLE_BLURBEHIND: "模糊 (不带颜色)",
+                                                ACCENT_STATE.ACCENT_ENABLE_TRANSPARENTGRADIENT: "透明 (带透明度颜色)",
+                                                ACCENT_STATE.ACCENT_ENABLE_HOSTBACKDROP: "透明 (不带颜色)",
+                                                ACCENT_STATE.ACCENT_ENABLE_GRADIENT: "仅颜色",
+                                            }, "模糊效果"),
+            "accent_color": ColorParam((0x2B, 0x2B, 0x2B), "模糊背景颜色"),
+            "accent_alpha": IntParam(152, "模糊背景透明度"),
+
+            "enable_blur_behind": BoolParam(False, "启用窗口背景模糊 (加黑)"),
         }
     )
     enable = False
@@ -91,6 +120,7 @@ class Plugin(BasePlugin):
         kugou_launched = False
         logger.info(f"[{name}]: 插件线程已启动")
         first_flag = True
+        hwnd_cache = None
         while True:
             wait_time = self.config["inv_launched"] if kugou_launched else self.config["inv_non_launched"]
             try:
@@ -102,6 +132,11 @@ class Plugin(BasePlugin):
                 pass
             if not self.run_flag:
                 break
+            if kugou_launched:
+                try:
+                    GetWindowText(hwnd_cache)
+                except OSError:
+                    kugou_launched = False
 
             kugou_hwnd = get_main_kugou_window()
             if kugou_hwnd is None:
@@ -109,6 +144,7 @@ class Plugin(BasePlugin):
                 continue
             if kugou_launched:
                 continue
+            hwnd_cache = kugou_hwnd
             logger.info(f"[{name}]: 酷狗窗口已找到: {kugou_hwnd}, 修改窗口")
             self.update_window(kugou_hwnd)
             kugou_launched = True
@@ -128,10 +164,9 @@ class Plugin(BasePlugin):
         self.enable = False
 
     def update_window(self, hwnd: int):
-        enable = self.config["blur_behind"]
         # noinspection PyTypeChecker
-        color: tuple[int, int, int, int] = tuple(self.config["blur_color"]) + (self.config["blur_alpha"],)
+        color: tuple[int, int, int, int] = tuple(self.config["accent_color"]) + (self.config["accent_alpha"],)
         right_corner_border_style(hwnd)
-        msg = blur_behind(hwnd, color, enable)
+        msg = blur_behind(hwnd, color, self.config)
         if msg is not None:
             wx.MessageBox(msg, "错误")

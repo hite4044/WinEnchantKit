@@ -65,6 +65,12 @@ class ChoiceParam(ConfigParam):
         self.choices = choices
 
 
+class ChoiceParamPlus(ConfigParam):
+    def __init__(self, default: Any, choices: dict[Any, str], desc: str):
+        super().__init__(ParamKind.CHOICE, default, str, desc)
+        self.choices = list(choices.values())
+        self.choices_values = list(choices.keys())
+
 class ButtonParam(ConfigParam):
     def __init__(self, handler: callable, desc: str):
         super().__init__(ParamKind.BUTTON, True, bool, desc)

@@ -79,7 +79,7 @@ class ControlPanel(wx.Frame):
         self.button_panel.sizer.Add(self.start_btn)
         self.button_panel.sizer.Add(self.stop_btn)
         self.button_panel.sizer.Add(self.config_btn)
-        self.button_panel.sizer.Add(self.auto_launch_cb)
+        self.button_panel.sizer.Add(self.auto_launch_cb, 0, wx.LEFT, 2)
         self.button_panel.sizer.AddStretchSpacer()
         self.button_panel.sizer.Add(self.exit_btn)
         self.button_panel.SetSizer(self.button_panel.sizer)
@@ -170,8 +170,7 @@ class ControlPanel(wx.Frame):
             msg_queue.put("STOP")
         return True
 
-    @staticmethod
-    def progress_dialog_func(msg: str, msg_queue: Queue):
+    def progress_dialog_func(self, msg: str, msg_queue: Queue):
         dialog = wx.GenericProgressDialog("安装插件中", msg, 100,
                                           style=wx.PD_APP_MODAL | wx.PD_CAN_ABORT | wx.PD_AUTO_HIDE)
         dialog.Pulse()
@@ -186,7 +185,8 @@ class ControlPanel(wx.Frame):
                 wx.CallAfter(dialog.Update, value, msg.format(*format_args))
 
         Thread(target=msg_thread, daemon=True).start()
-        dialog.ShowModal()
+        if self.IsShown():
+            dialog.ShowModal()
         dialog.Destroy()
 
     @staticmethod
@@ -223,6 +223,7 @@ class ControlPanel(wx.Frame):
         plugin_info = self.plugins[id_]
         if plugin_info.main_class.config:
             plugin_info.main_class.update_config(plugin_info.main_class.config.copy(), config_dict)
+        self.save_config()
 
     def on_item_selected(self, event: wx.ListEvent):
         if event.GetIndex() != -1:
