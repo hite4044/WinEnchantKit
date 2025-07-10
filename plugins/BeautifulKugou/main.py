@@ -13,19 +13,20 @@ name = "酷狗美化"
 logger = logging.getLogger("WinEnchantKitLogger_beautiful_kugou")
 
 
-def right_corner_border_style(hwnd: int):
+def right_corner_border_style(hwnd: int, enable_round_corner: bool, corner_type: int):
     # 边框
     style = GetWindowLong(hwnd, win32con.GWL_STYLE)
     new_style = add_style(style, win32con.WS_BORDER)
     SetWindowLong(hwnd, win32con.GWL_STYLE, new_style)
 
-    # 圆角
-    DwmSetWindowAttribute(
-        hwnd,
-        DWMWINDOWATTRIBUTE.DWMWA_WINDOW_CORNER_PREFERENCE,
-        ctypes.byref(ctypes.c_int(DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUND)),
-        ctypes.sizeof(ctypes.c_int),
-    )
+    if enable_round_corner:
+        # 圆角
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWINDOWATTRIBUTE.DWMWA_WINDOW_CORNER_PREFERENCE,
+            ctypes.byref(ctypes.c_int(corner_type)),
+            ctypes.sizeof(ctypes.c_int),
+        )
 
 
 def blur_behind(hwnd: int, color: tuple[int, int, int, int],
@@ -80,7 +81,31 @@ class Plugin(BasePlugin):
             "inv_non_launched": FloatParam(2.0, "检查窗口的间隔时间"),
             "inv_launched": FloatParam(10.0, "酷狗启动后的检查间隔时间"),
 
-            "set_back_type": BoolParam(False, "设置背景材质 (Win 11 22621+)"),
+            "enable_set_composition": BoolParam(False, "设置窗口效果 (Win 10 16299+)"),
+            "accent_state": ChoiceParamPlus(ACCENT_STATE.ACCENT_ENABLE_ACRYLICBLURBEHIND,
+                                            {
+                                                ACCENT_STATE.ACCENT_DISABLED: "禁用",
+                                                ACCENT_STATE.ACCENT_ENABLE_ACRYLICBLURBEHIND: "模糊 (带颜色)",
+                                                ACCENT_STATE.ACCENT_ENABLE_BLURBEHIND: "模糊 (不带颜色)",
+                                                ACCENT_STATE.ACCENT_ENABLE_TRANSPARENTGRADIENT: "透明 (带颜色)",
+                                                ACCENT_STATE.ACCENT_ENABLE_HOSTBACKDROP: "透明 (不带颜色)",
+                                                ACCENT_STATE.ACCENT_ENABLE_GRADIENT: "仅无透明度颜色",
+                                            }, "模糊效果"),
+            "accent_color": ColorParam((0x2B, 0x2B, 0x2B), "模糊背景颜色"),
+            "accent_alpha": IntParam(152, "模糊背景透明度"),
+
+            "enable_round_corner": BoolParam(False, "启用窗口圆角 (Win 11 22000+)"),
+            "corner_type": ChoiceParamPlus(DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUND,
+                                           {
+                                               DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_DEFAULT: "默认",
+                                               DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUND: "圆角",
+                                               DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUNDSMALL: "小圆角",
+                                               DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_DONOTROUND: "直角",
+                                           }, "圆角类型"),
+
+            "enable_blur_behind": BoolParam(False, "启用窗口背景模糊 (颜色加深)"),
+
+            "set_back_type": BoolParam(False, "设置背景材质 (Win 11 22621+) (无效)"),
             "back_type": ChoiceParamPlus(DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW,
                                          {
                                              DWM_SYSTEMBACKDROP_TYPE.DWMSBT_NONE: "无",
@@ -88,20 +113,6 @@ class Plugin(BasePlugin):
                                              DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW: "Acrylic (窗口模糊)",
                                              DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TABBEDWINDOW: "Mica Alt (桌面壁纸模糊 (更深))"
                                          }, "背景材质"),
-            "enable_set_composition": BoolParam(False, "设置窗口效果"),
-            "accent_state": ChoiceParamPlus(ACCENT_STATE.ACCENT_ENABLE_ACRYLICBLURBEHIND,
-                                            {
-                                                ACCENT_STATE.ACCENT_DISABLED: "无",
-                                                ACCENT_STATE.ACCENT_ENABLE_ACRYLICBLURBEHIND: "模糊 (带颜色)",
-                                                ACCENT_STATE.ACCENT_ENABLE_BLURBEHIND: "模糊 (不带颜色)",
-                                                ACCENT_STATE.ACCENT_ENABLE_TRANSPARENTGRADIENT: "透明 (带透明度颜色)",
-                                                ACCENT_STATE.ACCENT_ENABLE_HOSTBACKDROP: "透明 (不带颜色)",
-                                                ACCENT_STATE.ACCENT_ENABLE_GRADIENT: "仅颜色",
-                                            }, "模糊效果"),
-            "accent_color": ColorParam((0x2B, 0x2B, 0x2B), "模糊背景颜色"),
-            "accent_alpha": IntParam(152, "模糊背景透明度"),
-
-            "enable_blur_behind": BoolParam(False, "启用窗口背景模糊 (加黑)"),
         }
     )
     enable = False
@@ -118,7 +129,7 @@ class Plugin(BasePlugin):
 
     def thread_func(self):
         kugou_launched = False
-        logger.info(f"[{name}]: 插件线程已启动")
+        logger.info(f"插件线程已启动")
         first_flag = True
         hwnd_cache = None
         while True:
@@ -135,7 +146,9 @@ class Plugin(BasePlugin):
             if kugou_launched:
                 try:
                     GetWindowText(hwnd_cache)
+                    continue
                 except OSError:
+                    logger.info(f"窗口已关闭")
                     kugou_launched = False
 
             kugou_hwnd = get_main_kugou_window()
@@ -145,10 +158,10 @@ class Plugin(BasePlugin):
             if kugou_launched:
                 continue
             hwnd_cache = kugou_hwnd
-            logger.info(f"[{name}]: 酷狗窗口已找到: {kugou_hwnd}, 修改窗口")
+            logger.info(f"酷狗窗口已找到: {kugou_hwnd}, 修改窗口")
             self.update_window(kugou_hwnd)
             kugou_launched = True
-        logger.info(f"[{name}]: 插件线程已退出")
+        logger.info(f"插件线程已退出")
 
     def update_config(self, _, new_config: dict[str, Any]):
         self.config.load_values(new_config)
@@ -166,7 +179,7 @@ class Plugin(BasePlugin):
     def update_window(self, hwnd: int):
         # noinspection PyTypeChecker
         color: tuple[int, int, int, int] = tuple(self.config["accent_color"]) + (self.config["accent_alpha"],)
-        right_corner_border_style(hwnd)
+        right_corner_border_style(hwnd, self.config["enable_round_corner"], self.config["corner_type"])
         msg = blur_behind(hwnd, color, self.config)
         if msg is not None:
             wx.MessageBox(msg, "错误")

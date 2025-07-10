@@ -1,0 +1,10 @@
+{
+  "id": "no_kugou_ad",
+  "name": "酷狗无广告",
+  "author": "hite404",
+  "version": "1.0.0",
+  "main_file": "main.py",
+  "main_class": "Plugin",
+  "desc": "模拟窗口点击关闭酷狗的广告",
+  "requirements": {}
+}

@@ -76,8 +76,11 @@ class ConfigLine(wx.Panel):
             self.input.SetValue(value)
         elif param.kind == ParamKind.CHOICE:
             assert isinstance(param, ChoiceParam) or isinstance(param, ChoiceParamPlus)
-            self.input = wx.ComboBox(parent, choices=param.choices)
-            self.input.Select(param.choices_values.index(value))
+            self.input = wx.Choice(parent, choices=param.choices)
+            if isinstance(param, ChoiceParamPlus):
+                self.input.Select(param.choices_values.index(value))
+            else:
+                self.input.SetStringSelection(value)
         elif param.kind == ParamKind.BUTTON:
             assert isinstance(param, ButtonParam)
             self.input = wx.Button(parent, label=param.desc)
@@ -105,7 +108,7 @@ class ConfigLine(wx.Panel):
             return self.input.get_value()
         elif self.param.kind == ParamKind.CHOICE:
             assert isinstance(self.param, ChoiceParam) or isinstance(self.param, ChoiceParamPlus)
-            assert isinstance(self.input, wx.ComboBox)
+            assert isinstance(self.input, wx.ComboBox) or isinstance(self.input, wx.Choice)
             if isinstance(self.param, ChoiceParamPlus):
                 return self.param.choices_values[self.input.GetSelection()]
             return self.input.GetValue()

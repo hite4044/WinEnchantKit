@@ -1,7 +1,7 @@
 import asyncio
-import atexit
 import json
 import logging
+import multiprocessing
 import typing
 from dataclasses import dataclass
 from importlib import import_module
@@ -64,7 +64,7 @@ class ControlPanel(wx.Frame):
         self.sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.plugins_lc = wx.ListCtrl(self, style=wx.LC_REPORT)
         self.plugins_lc.InsertColumn(0, "插件ID")
-        self.plugins_lc.InsertColumn(1, "插件名", width=160)
+        self.plugins_lc.InsertColumn(1, "插件名", width=180)
         self.plugins_lc.InsertColumn(2, "状态", width=60)
         self.plugins_lc.InsertColumn(3, "版本", width=60)
         self.plugins_lc.InsertColumn(4, "描述", width=450)
@@ -342,6 +342,8 @@ class ControlPanel(wx.Frame):
     def on_exit_timeout():
         sleep(4)
         logger.info("退出时间到达限制 (4s), 触发大保底")
+        for process in multiprocessing.active_children():
+            process.terminate()
         exit(0)
 
     def show_or_hide(self):

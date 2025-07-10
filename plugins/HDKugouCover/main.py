@@ -7,6 +7,7 @@ from os import makedirs
 from os.path import isdir, isfile, join, abspath
 from threading import Event, Thread
 
+import wx
 from winsdk.windows.foundation import Uri
 from winsdk.windows.media import SystemMediaTransportControls as SMTControls, \
     MediaPlaybackType, \
@@ -34,7 +35,7 @@ class Plugin(BasePlugin):
     def __init__(self):
         self.config = ModuleConfig({
             "tip": TipParam("插件启动后请把SMTC会话切换为本程序创建的会话"),
-            "tip2": TipParam("(特征: 第二行文字前有空格)"),
+            "tip2": TipParam("(特征: 第二行文字前多一个空格)"),
             "cover_size": ChoiceParam("480", ["480", "400", "240", "150", "120", "100", "64"], "封面尺寸"),
             "use_max_size": BoolParam(False, "使用最大封面尺寸"),
             "refresh_info": ButtonParam(lambda _: self.on_source_update(force_update=True), "立即更新信息"),
@@ -55,6 +56,17 @@ class Plugin(BasePlugin):
 
     def remove_cache(self):
         self.cover_cache.clear()
+        file_list = os.listdir("cache/kugou_music_covers")
+        all_length = len(file_list)
+        dialog = wx.ProgressDialog("正在删除缓存", "请稍候...", 100, wx.CENTRE | wx.RESIZE_BORDER)
+        for i, file in enumerate(file_list):
+            file_path = join("cache/kugou_music_covers", file)
+            try:
+                os.remove(file_path)
+            except OSError:
+                logger.warning(f"删除文件失败: {file_path}")
+            dialog.Update(i, f"({i+1}/{all_length})\n正在删除缓存: {file}")
+        dialog.Destroy()
         self.save_cache()
 
     def restart_plugin(self):
@@ -155,10 +167,11 @@ class Plugin(BasePlugin):
             stream = wait_result(info.thumbnail.open_read_async())
             thumbnail = RandomAccessStreamReference.create_from_stream(stream)
         else:
-            cover_cache_fp = join("cache/covers", f"{music.hash}_full.png" if self.config["use_max_size"] else \
-                f"{music.hash}_{self.config['cover_size']}.png")
+            cover_cache_fp = join("cache/kugou_music_covers",
+                                  f"{music.hash}_full.png" if self.config["use_max_size"] else \
+                                      f"{music.hash}_{self.config['cover_size']}.png")
             if not isfile(cover_cache_fp):
-                makedirs("cache/covers", exist_ok=True)
+                makedirs("cache/kugou_music_covers", exist_ok=True)
 
                 def cover_save_thread():
                     resp = requests.get(music.full_cover_url if self.config["use_max_size"] else music.cover_url,
@@ -197,7 +210,7 @@ class Plugin(BasePlugin):
         updater.update()
 
     def load_cover(self, info: SessionMediaProperties, size: int = 480):
-        song_id = info.title + info.artist + info.album_artist + str(size)
+        song_id = f"{info.title} - {info.artist} - {info.album_artist} - {size}"
         if song_id in self.cover_cache:
             song_hash, cover_url, cover_url_full = self.cover_cache[song_id]
         else:
