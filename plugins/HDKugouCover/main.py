@@ -38,6 +38,7 @@ class PluginConfig(ModuleConfigPlus):
                                                          "封面尺寸")
         self.use_max_size: BoolParam | bool = BoolParam(False, "使用最大封面尺寸")
         self.allways_playing: BoolParam | bool = BoolParam(False, "永不暂停SMTC")
+        self.exchange_title2album: BoolParam | bool = BoolParam(False, "将专辑名替换为歌曲名")
         self.refresh_info: ButtonParam | None = ButtonParam(desc="立即更新信息")
         self.clear_cache: ButtonParam | None = ButtonParam(desc="清除封面url缓存")
 
@@ -210,7 +211,12 @@ class Plugin(BasePlugin):
 
                 thumbnail = asyncio.run(load_cover_by_fucking_async())
 
-        self.update_smtc_info(info.title, info.artist, info.album_title, info.album_artist, thumbnail)
+        print(info.title, info.artist, info.album_title, info.album_artist, sep="|")
+        print(self.config.exchange_title2album, info.title, info.album_artist, info.album_title, info.artist)
+        if self.config.exchange_title2album:
+            self.update_smtc_info(info.title, info.album_artist, info.album_title, info.artist, thumbnail)
+        else:
+            self.update_smtc_info(info.title, info.artist, info.album_title, info.album_artist, thumbnail)
 
     def update_smtc_info(self, title: str, artist: str, album_title: str, album_artist: str,
                          thumbnail: RandomAccessStreamReference = None):
