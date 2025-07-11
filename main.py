@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import multiprocessing
-import typing
 from dataclasses import dataclass
 from importlib import import_module
 from os import listdir
@@ -373,10 +372,15 @@ class ControlPanel(wx.Frame):
             'plugins': {}
         }
         for plugin_id, plugin_info in self.plugins.items():
-            config_data['plugins'][plugin_id] = dict(plugin_info.main_class.config)
+            prepare = {}
+            for key, value in plugin_info.main_class.config.items():
+                if type(value) in [str, int, float, bool, tuple, list, dict]:
+                    prepare[key] = value
+            config_data['plugins'][plugin_id] = prepare
         try:
+            content = json.dumps(config_data, indent=4, ensure_ascii=False)
             with open(config_fp, "w", encoding="utf-8") as f:
-                json.dump(config_data, typing.cast(typing.Any, f), indent=4, ensure_ascii=False)
+                f.write(content)
         except OSError:
             logger.error("无法保存配置文件")
 

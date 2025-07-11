@@ -76,15 +76,17 @@ class ConfigLine(wx.Panel):
             self.input.SetValue(value)
         elif param.kind == ParamKind.CHOICE:
             assert isinstance(param, ChoiceParam) or isinstance(param, ChoiceParamPlus)
-            self.input = wx.Choice(parent, choices=param.choices)
             if isinstance(param, ChoiceParamPlus):
+                self.input = wx.Choice(parent, choices=param.choices)
                 self.input.Select(param.choices_values.index(value))
             else:
+                self.input = wx.ComboBox(parent, choices=param.choices)
                 self.input.SetStringSelection(value)
         elif param.kind == ParamKind.BUTTON:
             assert isinstance(param, ButtonParam)
             self.input = wx.Button(parent, label=param.desc)
-            self.input.Bind(wx.EVT_BUTTON, param.handler)
+            # noinspection PyUnresolvedReferences
+            self.input.Bind(wx.EVT_BUTTON, lambda _: param.handler())
             self.label.SetLabel("")
         elif param.kind == ParamKind.COLOR:  # 新增颜色类型处理
             self.input = ColorInputCtrl(parent, value)

@@ -30,21 +30,31 @@ class MusicData:
     full_cover_url: str
 
 
+class PluginConfig(ModuleConfigPlus):
+    def __init__(self):
+        super().__init__()
+        self.cover_size: ChoiceParam | str = ChoiceParam("480",
+                                                         ["480", "400", "240", "150", "120", "100", "64"],
+                                                         "封面尺寸")
+        self.use_max_size: BoolParam | bool = BoolParam(False, "使用最大封面尺寸")
+        self.allways_playing: BoolParam | bool = BoolParam(False, "永不暂停SMTC")
+        self.refresh_info: ButtonParam | None = ButtonParam(desc="立即更新信息")
+        self.clear_cache: ButtonParam | None = ButtonParam(desc="清除封面url缓存")
+
+
 class Plugin(BasePlugin):
 
     def __init__(self):
-        self.config = ModuleConfig({
-            "tip": TipParam("插件启动后请把SMTC会话切换为本程序创建的会话"),
-            "tip2": TipParam("(特征: 第二行文字前多一个空格)"),
-            "cover_size": ChoiceParam("480", ["480", "400", "240", "150", "120", "100", "64"], "封面尺寸"),
-            "use_max_size": BoolParam(False, "使用最大封面尺寸"),
-            "refresh_info": ButtonParam(lambda _: self.on_source_update(force_update=True), "立即更新信息"),
-            "clear_cache": ButtonParam(lambda _: self.remove_cache(), "清除封面url缓存")
-        })
+        self.config = PluginConfig()
+        self.config.refresh_info.handler = lambda: self.on_source_update(force_update=True)
+        self.config.clear_cache.handler = self.remove_cache
+        self.config.load()
+
         self.player: MediaPlayer | None = None
         self.smtc: SMTControls | None = None
         self.kugou_session: Session | None = None
         self.sessions: SessionManager = wait_result(SessionManager.request_async())
+        self.is_fake_playing = False
         self.last_song = None
         self.stop_flag = Event()
         self.cover_cache: dict[str, tuple[str, str, str]] = {}
@@ -58,14 +68,14 @@ class Plugin(BasePlugin):
         self.cover_cache.clear()
         file_list = os.listdir("cache/kugou_music_covers")
         all_length = len(file_list)
-        dialog = wx.ProgressDialog("正在删除缓存", "请稍候...", 100, wx.CENTRE | wx.RESIZE_BORDER)
+        dialog = wx.ProgressDialog("正在删除缓存", "请稍候...", 100, None, wx.CENTRE | wx.RESIZE_BORDER)
         for i, file in enumerate(file_list):
             file_path = join("cache/kugou_music_covers", file)
             try:
                 os.remove(file_path)
             except OSError:
                 logger.warning(f"删除文件失败: {file_path}")
-            dialog.Update(i, f"({i+1}/{all_length})\n正在删除缓存: {file}")
+            dialog.Update(i, f"({i + 1}/{all_length})\n正在删除缓存: {file}")
         dialog.Destroy()
         self.save_cache()
 
@@ -108,6 +118,8 @@ class Plugin(BasePlugin):
 
     def update_config(self, _, new_config: dict[str, Any]):
         self.config.load_values(new_config)
+        if self.config.allways_playing:
+            self.smtc.playback_status = MediaPlaybackStatus.PLAYING
         self.on_source_update(force_update=True)
 
     def stop(self):
@@ -133,6 +145,8 @@ class Plugin(BasePlugin):
         try:
             self.kugou_session = get_kugou_session()
             logger.info(f"找到 Kugou SMTC会话")
+            if self.config.allways_playing:
+                self.smtc.playback_status = MediaPlaybackStatus.PLAYING
             self.source_changed_token = self.kugou_session.add_playback_info_changed(self.on_source_update)
             self.on_source_update()
         except RuntimeError:
@@ -151,8 +165,10 @@ class Plugin(BasePlugin):
         info = get_kugou_info(self.kugou_session)
         song_id = info.title + info.artist + info.album_title + info.album_artist
 
-        self.smtc.playback_status = getattr(MediaPlaybackStatus,
-                                            self.kugou_session.get_playback_info().playback_status.name)
+        status: MediaPlaybackStatus = getattr(MediaPlaybackStatus,
+                                              self.kugou_session.get_playback_info().playback_status.name)
+        if status != self.smtc.playback_status and not self.config.allways_playing:
+            self.smtc.playback_status = status
 
         if song_id == self.last_song and not force_update:
             return
@@ -161,26 +177,26 @@ class Plugin(BasePlugin):
 
     def update_info(self, info: SessionMediaProperties):
         logger.info(f"更新歌曲信息: {info.title} - {info.artist}")
-        music = self.load_cover(info, self.config["cover_size"])
+        music = self.load_cover(info, int(self.config.cover_size))
         if music is None:
             logger.warning(f"搜索不到歌曲封面, 使用酷狗原封面")
             stream = wait_result(info.thumbnail.open_read_async())
             thumbnail = RandomAccessStreamReference.create_from_stream(stream)
         else:
             cover_cache_fp = join("cache/kugou_music_covers",
-                                  f"{music.hash}_full.png" if self.config["use_max_size"] else \
-                                      f"{music.hash}_{self.config['cover_size']}.png")
+                                  f"{music.hash}_full.png" if self.config.use_max_size else \
+                                      f"{music.hash}_{self.config.cover_size}.png")
             if not isfile(cover_cache_fp):
                 makedirs("cache/kugou_music_covers", exist_ok=True)
 
                 def cover_save_thread():
-                    resp = requests.get(music.full_cover_url if self.config["use_max_size"] else music.cover_url,
+                    resp = requests.get(music.full_cover_url if self.config.use_max_size else music.cover_url,
                                         headers=HEADERS, data=None)
                     with open(cover_cache_fp, "wb") as f:
                         f.write(resp.content)
 
                 Thread(target=cover_save_thread).start()
-                uri = music.full_cover_url if self.config["use_max_size"] else music.cover_url
+                uri = music.full_cover_url if self.config.use_max_size else music.cover_url
                 thumbnail = RandomAccessStreamReference.create_from_uri(Uri(uri))
             else:
                 cover_cache_fp = abspath(cover_cache_fp)
@@ -233,16 +249,24 @@ class Plugin(BasePlugin):
         if not self.check_source_valid():
             return
         logger.info(f"用户按下按钮: {args.button.name}")
-        if args.button == SMTCButton.PLAY:
-            self.smtc.playback_status = MediaPlaybackStatus.PLAYING
-            wait_result(self.kugou_session.try_play_async())
-        elif args.button == SMTCButton.PAUSE:
-            self.smtc.playback_status = MediaPlaybackStatus.PAUSED
-            wait_result(self.kugou_session.try_pause_async())
-        elif args.button == SMTCButton.PREVIOUS:
+        if args.button == SMTCButton.PREVIOUS:
             wait_result(self.kugou_session.try_skip_previous_async())
         elif args.button == SMTCButton.NEXT:
             wait_result(self.kugou_session.try_skip_next_async())
+        elif args.button == SMTCButton.PLAY:
+            wait_result(self.kugou_session.try_play_async())
+            if self.config.allways_playing:
+                return
+            self.smtc.playback_status = MediaPlaybackStatus.PLAYING
+        elif args.button == SMTCButton.PAUSE and self.is_fake_playing:
+            wait_result(self.kugou_session.try_play_async())
+            self.is_fake_playing = False
+        elif args.button == SMTCButton.PAUSE:
+            wait_result(self.kugou_session.try_pause_async())
+            if self.config.allways_playing:
+                self.is_fake_playing = True
+                return
+            self.smtc.playback_status = MediaPlaybackStatus.PAUSED
 
 
 if __name__ == "__main__":

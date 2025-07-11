@@ -1,7 +1,7 @@
 """"""
 from copy import copy
 from enum import Enum
-from typing import Any, Type
+from typing import Any, Type, Callable
 
 
 class ParamKind(Enum):
@@ -71,10 +71,11 @@ class ChoiceParamPlus(ConfigParam):
         self.choices = list(choices.values())
         self.choices_values = list(choices.keys())
 
+
 class ButtonParam(ConfigParam):
-    def __init__(self, handler: callable, desc: str):
+    def __init__(self, handler: Callable[[], Any] = lambda: None, desc: str = ""):
         super().__init__(ParamKind.BUTTON, True, bool, desc)
-        self.handler = handler
+        self.handler: Callable[[], Any] = handler
 
 
 param_kind_map = {
@@ -94,6 +95,30 @@ class ModuleConfig(dict):
 
     def load_values(self, data: dict[str, Any]):
         self.update({copy(key): copy(data[key]) for key in data if key in self.params})
+
+
+class ModuleConfigPlus(ModuleConfig):
+    # noinspection PyMissingConstructor
+    def __init__(self):
+        self.names = []
+        self.end_collection = False
+
+    def __setattr__(self, key, value):
+        super().__setattr__(key, value)
+        if hasattr(self, "end_collection") and not self.end_collection and isinstance(value, ConfigParam):
+            print("SET", key, value)
+            self.names.append(key)
+
+    def load(self):
+        self.end_collection = True
+        params = self.find_params()
+        self.params = params
+        self.update({copy(key): copy(param.default) for key, param in params.items()})
+        for key, value in params.items():
+            print(key, value.default)
+            setattr(self, key, value.default)
+    def find_params(self):
+        return {name: getattr(self, name) for name in self.names}
 
 
 class BasePlugin:
