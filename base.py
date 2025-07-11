@@ -100,23 +100,24 @@ class ModuleConfig(dict):
 class ModuleConfigPlus(ModuleConfig):
     # noinspection PyMissingConstructor
     def __init__(self):
+        dict.__init__(self)
         self.names = []
         self.end_collection = False
 
     def __setattr__(self, key, value):
         super().__setattr__(key, value)
         if hasattr(self, "end_collection") and not self.end_collection and isinstance(value, ConfigParam):
-            print("SET", key, value)
             self.names.append(key)
-
     def load(self):
         self.end_collection = True
         params = self.find_params()
         self.params = params
         self.update({copy(key): copy(param.default) for key, param in params.items()})
-        for key, value in params.items():
-            print(key, value.default)
-            setattr(self, key, value.default)
+
+    def update(self, m, /, **kwargs):
+        super().update(m, **kwargs)
+        for key, value in m.items():
+            setattr(self, key, value)
     def find_params(self):
         return {name: getattr(self, name) for name in self.names}
 
