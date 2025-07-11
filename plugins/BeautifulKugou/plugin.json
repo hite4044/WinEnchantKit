@@ -2,7 +2,7 @@
   "id": "beautiful_kugou",
   "name": "酷狗美化",
   "author": "hite404",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "main_file": "main.py",
   "main_class": "Plugin",
   "desc": "使得酷狗的窗口拥有圆角、背景透明模糊！",

@@ -2,7 +2,7 @@
   "id": "mc_record_alert",
   "name": "MC录屏提示",
   "author": "hite404",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "main_file": "main.py",
   "main_class": "Plugin",
   "desc": "在你游玩Minecraft并忘记录屏时，弹出提示",
