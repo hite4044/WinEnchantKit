@@ -39,6 +39,10 @@ class PluginConfig(ModuleConfigPlus):
         self.use_max_size: BoolParam | bool = BoolParam(False, "使用最大封面尺寸")
         self.allways_playing: BoolParam | bool = BoolParam(False, "永不暂停SMTC")
         self.exchange_title2album: BoolParam | bool = BoolParam(False, "将专辑名替换为歌曲名")
+        self.default_title: StringParam | str = StringParam("Title", "默认标题")
+        self.default_artist: StringParam | str = StringParam("Artist", "默认艺术家")
+        self.default_album_title: StringParam | str = StringParam("Album Title", "默认专辑名")
+        self.default_album_artist: StringParam | str = StringParam("Album Artist", "默认专辑艺术家")
         self.refresh_info: ButtonParam | None = ButtonParam(desc="立即更新信息")
         self.clear_cache: ButtonParam | None = ButtonParam(desc="清除封面url缓存")
 
@@ -110,7 +114,7 @@ class Plugin(BasePlugin):
         logger.info(f"创建SMTC对象")
         self.smtc, self.player = create_smtc()
         self.smtc.playback_status = MediaPlaybackStatus.STOPPED
-        self.update_smtc_info("Title", "Artist", "Album Title", "Album Artist", None)
+        self.default()
         logger.info(f"注册事件")
         self.button_pressed_token = self.smtc.add_button_pressed(self.on_button_press)
         if not self.has_reg_event:
@@ -142,7 +146,7 @@ class Plugin(BasePlugin):
             logger.info("Kugou SMTC会话已失效")
             self.source_changed_token = self.kugou_session = self.last_song = None
             self.smtc.playback_status = MediaPlaybackStatus.STOPPED
-            self.update_smtc_info("Title", "Artist", "Album Title", "Album Artist", None)
+            self.default()
         try:
             self.kugou_session = get_kugou_session()
             logger.info(f"找到 Kugou SMTC会话")
@@ -160,8 +164,14 @@ class Plugin(BasePlugin):
         song_id = info.title + info.artist + info.album_title
         return song_id != ""
 
+    def default(self):
+        self.update_smtc_info(self.config.default_title, self.config.default_artist,
+                              self.config.default_album_title, self.config.default_album_artist, None)
+
     def on_source_update(self, *_, force_update: bool = False):
         if not self.check_source_valid():
+            if force_update:
+                self.default()
             return
         info = get_kugou_info(self.kugou_session)
         song_id = info.title + info.artist + info.album_title + info.album_artist
@@ -211,8 +221,6 @@ class Plugin(BasePlugin):
 
                 thumbnail = asyncio.run(load_cover_by_fucking_async())
 
-        print(info.title, info.artist, info.album_title, info.album_artist, sep="|")
-        print(self.config.exchange_title2album, info.title, info.album_artist, info.album_title, info.artist)
         if self.config.exchange_title2album:
             self.update_smtc_info(info.title, info.album_artist, info.album_title, info.artist, thumbnail)
         else:
