@@ -4,6 +4,7 @@ import wx
 
 from base import *
 from gui.center_text import CenteredText
+from gui.ect_menu import EtcMenu
 
 
 class ColorInputCtrl(wx.Panel):
@@ -62,6 +63,54 @@ class ColorInputCtrl(wx.Panel):
         return int(self.r_input.GetValue()), int(self.g_input.GetValue()), int(self.b_input.GetValue())
 
 
+class EditableListBox(wx.Panel):
+    def __init__(self, parent: wx.Window, data: list):
+        super().__init__(parent=parent)
+        self.data = data
+
+        self.ctrl = wx.ListCtrl(self,
+                                style=wx.LC_REPORT | wx.LC_NO_HEADER | wx.LC_EDIT_LABELS)
+        self.add_btn = wx.Button(self.ctrl, label="+", size=(25, 25))
+        self.remove_btn = wx.Button(self.ctrl, label="-", size=(25, 25))
+
+        self.ctrl.AppendColumn("NO_HEADER", width=300)
+        [self.ctrl.InsertItem(i, content) for i, content in enumerate(map(str, data))]
+
+        btn_sizer_ver = wx.BoxSizer(wx.VERTICAL)
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        btn_sizer.AddStretchSpacer()
+        btn_sizer.Add(self.add_btn, 0, wx.EXPAND)
+        btn_sizer.Add(self.remove_btn, 0, wx.EXPAND)
+        btn_sizer_ver.AddStretchSpacer()
+        btn_sizer_ver.Add(btn_sizer, 0, wx.EXPAND)
+        self.ctrl.SetSizer(btn_sizer_ver)
+
+        self.sizer = wx.BoxSizer(wx.VERTICAL)
+        self.sizer.Add(self.ctrl, 1, wx.EXPAND)
+        self.SetSizer(self.sizer)
+
+        self.add_btn.Bind(wx.EVT_BUTTON, self.on_add)
+        self.remove_btn.Bind(wx.EVT_BUTTON, self.on_remove)
+
+    def on_menu(self, event: wx.ListEvent):
+        menu = EtcMenu()
+        index = event.GetIndex()
+        menu.Append("添加", self.on_add)
+        menu.Append("删除", self.on_remove, None, index)
+
+    def on_add(self, _):
+        self.ctrl.InsertItem(self.ctrl.GetItemCount(), "")
+        self.ctrl.EditLabel(self.ctrl.GetItemCount() - 1)
+
+    def on_remove(self, _, active_item: int = None):
+        if self.ctrl.GetItemCount() > 0:
+            active_item = self.ctrl.GetFirstSelected() if not active_item else active_item
+            self.ctrl.DeleteItem(active_item)
+
+    def get_value(self) -> list[str]:
+        return [self.ctrl.GetItemText(i) for i in range(self.ctrl.GetItemCount())]
+
+
 class ConfigLine(wx.Panel):
     def __init__(self, parent: wx.Window, param: ConfigParam, value: Any, use_sizer: bool = True):
         if use_sizer:
@@ -90,6 +139,8 @@ class ConfigLine(wx.Panel):
             self.label.SetLabel("")
         elif param.kind == ParamKind.COLOR:  # 新增颜色类型处理
             self.input = ColorInputCtrl(parent, value)
+        elif param.kind == ParamKind.LIST:
+            self.input = EditableListBox(parent, value)
         else:
             self.input = wx.TextCtrl(parent, value=str(value))
         if use_sizer:
@@ -108,6 +159,10 @@ class ConfigLine(wx.Panel):
         elif self.param.kind == ParamKind.COLOR:  # 新增颜色类型处理
             assert isinstance(self.input, ColorInputCtrl)
             return self.input.get_value()
+        elif self.param.kind == ParamKind.LIST:
+            assert isinstance(self.param, ListParam)
+            assert isinstance(self.input, EditableListBox)
+            return list(map(self.param.item_type, self.input.get_value()))
         elif self.param.kind == ParamKind.CHOICE:
             assert isinstance(self.param, ChoiceParam) or isinstance(self.param, ChoiceParamPlus)
             assert isinstance(self.input, wx.ComboBox) or isinstance(self.input, wx.Choice)
@@ -119,10 +174,10 @@ class ConfigLine(wx.Panel):
 
 
 class ConfigEditor(wx.Dialog):
-    def __init__(self, parent: wx.Frame, config: ModuleConfig, cbk: Callable[[dict[str, Any]], None]):
+    def __init__(self, parent: wx.Frame, name: str, config: ModuleConfig, cbk: Callable[[dict[str, Any]], None]):
         super().__init__(parent=parent, size=(400, 200), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.callback = cbk
-        self.SetTitle("配置")
+        self.SetTitle(f"插件配置 - {name}")
         self.sizer = wx.BoxSizer(wx.VERTICAL)
         for name, param in config.params.items():
             if param.kind == ParamKind.TIP:
@@ -135,7 +190,8 @@ class ConfigEditor(wx.Dialog):
             if param.kind == ParamKind.TIP:
                 continue
             line = ConfigLine(self, param, config[name], use_sizer=False)
-            line.input.SetMinSize((200, 25))
+            if param.kind != ParamKind.LIST:
+                line.input.SetMinSize((200, 25))
             self.cfg_sizer.Add(line.label, 0, wx.EXPAND)
             self.cfg_sizer.Add(line.input, 1, wx.EXPAND)
             self.lines[name] = line

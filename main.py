@@ -211,9 +211,9 @@ class ControlPanel(wx.Frame):
         if item == -1:
             wx.MessageBox("请选择一个插件", "错误", wx.ICON_ERROR)
             return
-        plugin_info = self.plugins[self.plugins_lc.GetItemText(item, 0)]
+        plugin_info: PluginInfo = self.plugins[self.plugins_lc.GetItemText(item, 0)]
         if plugin_info.main_class.config:
-            dialog = ConfigEditor(self, plugin_info.main_class.config,
+            dialog = ConfigEditor(self, plugin_info.info["name"], plugin_info.main_class.config,
                                   lambda cfg: self.plugin_config_cbk(plugin_info.id, cfg))
             dialog.ShowModal()
             self.save_config()

@@ -13,6 +13,7 @@ class ParamKind(Enum):
     BUTTON = 5
     TIP = 6
     COLOR = 7
+    LIST = 8
 
 
 class ConfigParam:
@@ -78,6 +79,14 @@ class ButtonParam(ConfigParam):
         self.handler: Callable[[], Any] = handler
 
 
+class ListParam(ConfigParam):
+    def __init__(self, default: list = None, desc: str = "", item_type: Type[Any] = str):
+        if default is None:
+            default = []
+        super().__init__(ParamKind.LIST, default, list, desc)
+        self.item_type = item_type
+
+
 param_kind_map = {
     ParamKind.STRING: StringParam,
     ParamKind.INT: IntParam,
@@ -108,6 +117,7 @@ class ModuleConfigPlus(ModuleConfig):
         super().__setattr__(key, value)
         if hasattr(self, "end_collection") and not self.end_collection and isinstance(value, ConfigParam):
             self.names.append(key)
+
     def load(self):
         self.end_collection = True
         params = self.find_params()
@@ -118,6 +128,7 @@ class ModuleConfigPlus(ModuleConfig):
         super().update(m, **kwargs)
         for key, value in m.items():
             setattr(self, key, value)
+
     def find_params(self):
         return {name: getattr(self, name) for name in self.names}
 
@@ -130,7 +141,7 @@ class BasePlugin:
         pass
 
     def update_config(self, old_config: dict[str, Any], new_config: dict[str, Any]):
-        pass
+        self.config.load_values(new_config)
 
     def stop(self):
         pass
