@@ -6,13 +6,22 @@ name = "Hite404工具插件模版"
 logger = logging.getLogger("WinEnchantKitLogger_plugin_temp")
 
 
+class PluginConfig(ModuleConfigPlus):
+    def __init__(self):
+        super().__init__()
+        self.tip: TipParam | str = TipParam("提示")
+        self.int: IntParam | int = IntParam(0, "整数")
+        self.float: FloatParam | float = FloatParam(0.0, "浮点数")
+        self.bool: BoolParam | bool = BoolParam(False, "布尔值")
+        self.string: StringParam | str = StringParam("", "字符串")
+        self.choice_old: ChoiceParam | str = ChoiceParam(0, ["0", "1"], "旧版选择 (字符串)")
+        self.choice: ChoiceParamPlus | int = ChoiceParamPlus(0, {0: "0", 1: "1"}, "选择")
+        self.list: ListParam | list[str] = ListParam(["0", "1"], "列表")
+        self.load()
+
+
 class Plugin(BasePlugin):
-    config = ModuleConfig({
-        "test": StringParam("test", "test"),
-        "test2": IntParam(1, "test2"),
-        "test3": FloatParam(1.0, "test3"),
-        "test4": BoolParam(True, "test4"),
-    })
+    config = PluginConfig()
 
     def start(self):
         logger.info("Starting plugin")
