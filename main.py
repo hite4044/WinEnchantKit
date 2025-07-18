@@ -72,6 +72,7 @@ class WEKConfig(ModuleConfigPlus):
 class ControlPanel(wx.Frame):
     def __init__(self, parent: wx.Window | None):
         super().__init__(parent, size=(850, 450), title="WinEnchantKit管理面板")
+        self.first_run = True
         self.config = WEKConfig()
         self.config.install_kugou_lnk.handler = self.install_kugou_lnk
         self.config.load()
@@ -191,6 +192,13 @@ class ControlPanel(wx.Frame):
         for index in range(self.plugins_lc.GetItemCount()):
             item: wx.ListItem = self.plugins_lc.GetItem(index)
             self.refresh_button_state(item.GetId())
+
+        if self.first_run:
+            ret = wx.MessageBox("你是第一次运行WinEnchantKit, 是否创建SMTC支持快捷方式?\n"
+                                "这样就可以在SMTC页面中看到 [🅺 Kugou]\n\n"
+                                "也可稍后在程序设置中查看", "提示", wx.YES_NO | wx.ICON_QUESTION)
+            if ret == wx.YES:
+                self.install_kugou_lnk()
 
     def load_plugin(self, plugin_dir: str):
         if isfile(join(plugin_dir, "plugin.json")):
@@ -428,6 +436,7 @@ class ControlPanel(wx.Frame):
     def save_config(self):
         config_fp = r".\config.json"
         config_data = {
+            "first_run": self.first_run,
             "WEK_config": self.config.copy(),
             'auto_launch': self.auto_launch_plugins,
             'plugins': {}
@@ -454,6 +463,7 @@ class ControlPanel(wx.Frame):
         try:
             with open(config_fp, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                self.first_run = data.get("first_run", self.first_run)
                 if data.get("WEK_config"):
                     self.self_config_cbk(data["WEK_config"])
                 self.auto_launch_plugins = data.get('auto_launch', [])
