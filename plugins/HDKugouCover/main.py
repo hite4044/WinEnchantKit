@@ -3,11 +3,13 @@ import json
 import os
 import string
 from dataclasses import dataclass
+from io import BytesIO
 from os import makedirs
 from os.path import isdir, isfile, join, abspath
 from threading import Event, Thread
 
 import wx
+from PIL import Image
 from winsdk.windows.foundation import Uri
 from winsdk.windows.media import SystemMediaTransportControls as SMTControls, \
     MediaPlaybackType, \
@@ -30,6 +32,12 @@ class MusicData:
     full_cover_url: str
 
 
+class CoverCacheFmt(Enum):
+    JPG = 0
+    PNG = 1
+    RAW_FORMAT = 2
+
+
 class PluginConfig(ModuleConfigPlus):
     def __init__(self):
         super().__init__()
@@ -43,6 +51,12 @@ class PluginConfig(ModuleConfigPlus):
         self.default_artist: StringParam | str = StringParam("Artist", "默认艺术家")
         self.default_album_title: StringParam | str = StringParam("Album Title", "默认专辑名")
         self.default_album_artist: StringParam | str = StringParam("Album Artist", "默认专辑艺术家")
+        self.cover_cache_quality: IntParam | int = IntParam(90, "封面缓存质量 (仅jpg) (1-100)")
+        self.cover_cache_format: ChoiceParamPlus | CoverCacheFmt = ChoiceParamPlus(CoverCacheFmt.JPG,
+                                                                                   {CoverCacheFmt.JPG: "JPG",
+                                                                                    CoverCacheFmt.PNG: "PNG",
+                                                                                    CoverCacheFmt.RAW_FORMAT: "原格式"
+                                                                                    }, "封面缓存格式")
         self.refresh_info: ButtonParam | None = ButtonParam(desc="立即更新信息")
         self.clear_cache: ButtonParam | None = ButtonParam(desc="清除封面url缓存")
 
@@ -195,21 +209,33 @@ class Plugin(BasePlugin):
             thumbnail = RandomAccessStreamReference.create_from_stream(stream)
         else:
             cover_cache_fp = join("cache/kugou_music_covers",
-                                  f"{music.hash}_full.png" if self.config.use_max_size else \
-                                      f"{music.hash}_{self.config.cover_size}.jpg")
-            if not isfile(cover_cache_fp):
+                                  f"{music.hash}_full" if self.config.use_max_size else \
+                                      f"{music.hash}_{self.config.cover_size}")
+            cache_paths = (cover_cache_fp + ".jpg", cover_cache_fp + ".png")
+            if not isfile(cache_paths[0]) and not isfile(cache_paths[1]):
                 makedirs("cache/kugou_music_covers", exist_ok=True)
 
                 def cover_save_thread():
                     resp = requests.get(music.full_cover_url if self.config.use_max_size else music.cover_url,
                                         headers=HEADERS, data=None)
-                    with open(cover_cache_fp, "wb") as f:
-                        f.write(resp.content)
+                    content = resp.content
+                    image = Image.open(BytesIO(content))
+                    if self.config.cover_cache_format == CoverCacheFmt.JPG:
+                        image.save(cover_cache_fp + ".jpg", "JPEG", quality=self.config.cover_cache_quality)
+                    elif self.config.cover_cache_format == CoverCacheFmt.PNG:
+                        image.save(cover_cache_fp + ".png", "PNG")
+                    else:
+                        fmt = "JPEG" if content.startswith(b"\xFF\xD8\xFF") else "PNG"
+                        image.save(cover_cache_fp + (".jpg" if fmt == "JPEG" else ".png"), fmt)
 
                 Thread(target=cover_save_thread).start()
                 uri = music.full_cover_url if self.config.use_max_size else music.cover_url
                 thumbnail = RandomAccessStreamReference.create_from_uri(Uri(uri))
             else:
+                if isfile(cache_paths[0]):
+                    cover_cache_fp += ".jpg"
+                elif isfile(cache_paths[1]):
+                    cover_cache_fp += ".png"
                 cover_cache_fp = abspath(cover_cache_fp)
 
                 async def load_cover_by_fucking_async():
