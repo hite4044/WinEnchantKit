@@ -62,6 +62,7 @@ class WEKConfig(ModuleConfigPlus):
     def __init__(self):
         super().__init__()
         self.font_size: IntParam | int = IntParam(11, "字体大小")
+        self.auto_startup_wait_time: FloatParam | float = FloatParam(5.0, "自动启动等待时间")
         self.install_kugou_lnk: ButtonParam = ButtonParam(
             desc="安装图标快捷方式 (需要管理员)",
             help_string="使得在SMTC页面出现 [🅺 Kugou] 而不是 [未知应用]\n"
@@ -182,7 +183,7 @@ class ControlPanel(wx.Frame):
         Thread(target=self.auto_start_plugins, daemon=True).start()
 
     def auto_start_plugins(self):
-        sleep(5)
+        sleep(self.config.auto_startup_wait_time)
         for plugin_id in self.auto_launch_plugins:
             info = self.plugins[plugin_id]
             if info.state == PluginState.STOPPED:
