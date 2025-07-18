@@ -64,17 +64,27 @@ class ColorInputCtrl(wx.Panel):
 
 
 class EditableListBox(wx.Panel):
-    def __init__(self, parent: wx.Window, data: list):
+    def __init__(self, parent: wx.Window, data: list, param: TableParam):
         super().__init__(parent=parent)
-        self.data = data
+        self.param = param
+        headers = param.headers if param.headers else [("NO_HEADER", 300)]
+        style = wx.LC_REPORT | wx.LC_EDIT_LABELS | wx.LC_SINGLE_SEL
+        if not param.headers:
+            style |= wx.LC_NO_HEADER
 
-        self.ctrl = wx.ListCtrl(self,
-                                style=wx.LC_REPORT | wx.LC_NO_HEADER | wx.LC_EDIT_LABELS)
+        self.ctrl = wx.ListCtrl(self, style=style)
         self.add_btn = wx.Button(self.ctrl, label="+", size=(25, 25))
         self.remove_btn = wx.Button(self.ctrl, label="-", size=(25, 25))
 
-        self.ctrl.AppendColumn("NO_HEADER", width=300)
-        [self.ctrl.InsertItem(i, content) for i, content in enumerate(map(str, data))]
+        for head, width in headers:
+            self.ctrl.AppendColumn(head, width=width)
+        for i, item in enumerate(data):
+            if not isinstance(item, tuple):
+                self.ctrl.InsertItem(i, str(item))
+            else:
+                self.ctrl.InsertItem(i, str(item[0]))
+                for j, content in enumerate(item[1:]):
+                    self.ctrl.SetItem(i, j + 1, str(content))
 
         btn_sizer_ver = wx.BoxSizer(wx.VERTICAL)
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -107,7 +117,12 @@ class EditableListBox(wx.Panel):
             active_item = self.ctrl.GetFirstSelected() if not active_item else active_item
             self.ctrl.DeleteItem(active_item)
 
-    def get_value(self) -> list[str]:
+    def get_value(self) -> list[str] | list[tuple[str, ...]]:
+        if self.param.headers:
+            return [
+                tuple(self.ctrl.GetItemText(i, j) for j in range(self.ctrl.GetColumnCount()))
+                for i in range(self.ctrl.GetItemCount())
+            ]
         return [self.ctrl.GetItemText(i) for i in range(self.ctrl.GetItemCount())]
 
 
@@ -140,7 +155,8 @@ class ConfigLine(wx.Panel):
         elif param.kind == ParamKind.COLOR:  # 新增颜色类型处理
             self.input = ColorInputCtrl(parent, value)
         elif param.kind == ParamKind.LIST:
-            self.input = EditableListBox(parent, value)
+            assert isinstance(param, TableParam)
+            self.input = EditableListBox(parent, value, param)
         else:
             self.input = wx.TextCtrl(parent, value=str(value))
         if use_sizer:
@@ -160,8 +176,10 @@ class ConfigLine(wx.Panel):
             assert isinstance(self.input, ColorInputCtrl)
             return self.input.get_value()
         elif self.param.kind == ParamKind.LIST:
-            assert isinstance(self.param, ListParam)
+            assert isinstance(self.param, TableParam)
             assert isinstance(self.input, EditableListBox)
+            if self.param.headers:
+                return self.input.get_value()
             return list(map(self.param.item_type, self.input.get_value()))
         elif self.param.kind == ParamKind.CHOICE:
             assert isinstance(self.param, ChoiceParam) or isinstance(self.param, ChoiceParamPlus)
@@ -178,6 +196,7 @@ class ConfigEditor(wx.Dialog):
         super().__init__(parent=parent, size=(400, 200), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.callback = cbk
         self.SetTitle(f"插件配置 - {name}")
+        self.SetFont(parent.GetFont())
         self.sizer = wx.BoxSizer(wx.VERTICAL)
         for name, param in config.params.items():
             if param.kind == ParamKind.TIP:
@@ -185,13 +204,14 @@ class ConfigEditor(wx.Dialog):
                 self.sizer.AddSpacer(5)
         self.cfg_sizer = wx.FlexGridSizer(len(config), 2, 5, 5)
         self.cfg_sizer.AddGrowableCol(1, 1)
+        #self.cfg_sizer.SetFlexibleDirection(wx.HORIZONTAL) #所有水平行高度相等
         self.lines: dict[str, ConfigLine] = {}
         for name, param in config.params.items():
             if param.kind == ParamKind.TIP:
                 continue
             line = ConfigLine(self, param, config[name], use_sizer=False)
             if param.kind != ParamKind.LIST:
-                line.input.SetMinSize((200, 25))
+                line.input.SetMinSize((200, 28))
             self.cfg_sizer.Add(line.label, 0, wx.EXPAND)
             self.cfg_sizer.Add(line.input, 1, wx.EXPAND)
             self.lines[name] = line

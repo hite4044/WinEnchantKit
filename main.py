@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import ctypes
 import multiprocessing
 from dataclasses import dataclass
 from importlib import import_module
@@ -13,7 +14,6 @@ from sys import executable
 from sys import path
 from threading import Thread
 from time import sleep
-from typing import Callable
 
 import pystray
 import wx
@@ -21,8 +21,10 @@ from PIL import Image
 
 from base import *
 from gui.config import ConfigEditor
+from gui.font import ft
 from lib.log import logger, get_plugin_logger
 
+#ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(ctypes.c_wchar_p("WinEnchantKit"))
 
 async def get_packages():
     packages = []
@@ -56,6 +58,7 @@ class PluginInfo:
 class ControlPanel(wx.Frame):
     def __init__(self, parent: wx.Window | None):
         super().__init__(parent, size=(850, 450), title="WinEnchantKit管理面板")
+        self.SetFont(ft(11))
         self.plugins_config = {}
         self.packages = get_packages()
         self.plugins: dict[str, PluginInfo] = {}
@@ -75,12 +78,12 @@ class ControlPanel(wx.Frame):
         self.config_btn = wx.Button(self.button_panel, label="配置")
         self.auto_launch_cb = wx.CheckBox(self.button_panel, label="自动启动")
         self.exit_btn = wx.Button(self.button_panel, label="退出程序")
-        self.button_panel.sizer.Add(self.start_btn)
-        self.button_panel.sizer.Add(self.stop_btn)
-        self.button_panel.sizer.Add(self.config_btn)
-        self.button_panel.sizer.Add(self.auto_launch_cb, 0, wx.LEFT, 2)
+        self.button_panel.sizer.Add(self.start_btn, 0, wx.EXPAND)
+        self.button_panel.sizer.Add(self.stop_btn, 0, wx.EXPAND)
+        self.button_panel.sizer.Add(self.config_btn, 0, wx.EXPAND)
+        self.button_panel.sizer.Add(self.auto_launch_cb, 0, wx.EXPAND | wx.LEFT, 2)
         self.button_panel.sizer.AddStretchSpacer()
-        self.button_panel.sizer.Add(self.exit_btn)
+        self.button_panel.sizer.Add(self.exit_btn, 0, wx.EXPAND)
         self.button_panel.SetSizer(self.button_panel.sizer)
         self.plugins_lc.SetMinSize(wx.Size(1920, 1080))
         self.sizer.Add(self.plugins_lc, flag=wx.EXPAND, proportion=1)

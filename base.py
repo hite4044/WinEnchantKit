@@ -79,12 +79,21 @@ class ButtonParam(ConfigParam):
         self.handler: Callable[[], Any] = handler
 
 
-class ListParam(ConfigParam):
-    def __init__(self, default: list = None, desc: str = "", item_type: Type[Any] = str):
+class TableParam(ConfigParam):
+    def __init__(self, default: list[tuple] = None, desc: str = "", item_type: Type[Any] = str,
+                 headers: list[tuple[str, int]] = None):
         if default is None:
             default = []
         super().__init__(ParamKind.LIST, default, list, desc)
+        self.headers = headers
         self.item_type = item_type
+
+
+class ListParam(TableParam):
+    def __init__(self, default: list = None, desc: str = "", item_type: Type[Any] = str):
+        if default is None:
+            default = []
+        super().__init__(default, desc, item_type)
 
 
 param_kind_map = {
