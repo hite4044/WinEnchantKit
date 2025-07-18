@@ -196,7 +196,7 @@ class Plugin(BasePlugin):
         else:
             cover_cache_fp = join("cache/kugou_music_covers",
                                   f"{music.hash}_full.png" if self.config.use_max_size else \
-                                      f"{music.hash}_{self.config.cover_size}.png")
+                                      f"{music.hash}_{self.config.cover_size}.jpg")
             if not isfile(cover_cache_fp):
                 makedirs("cache/kugou_music_covers", exist_ok=True)
 
