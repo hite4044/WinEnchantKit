@@ -31,7 +31,10 @@ from lib.log import logger, get_plugin_logger
 
 async def get_packages():
     packages = []
-    proc = Popen([executable, "-m", "pip", "list"], shell=True, stdout=PIPE)
+    exec_ = executable
+    if exec_.endswith("pythonw.exe") or not exec_.endswith("python.exe"):
+        return []
+    proc = Popen([exec_, "-m", "pip", "list"], shell=True, stdout=PIPE)
     proc.wait()
     for i, line in enumerate(proc.stdout.readlines()):
         line = line.decode("utf-8").rstrip("\r\n")
@@ -63,11 +66,15 @@ class WEKConfig(ModuleConfigPlus):
         super().__init__()
         self.font_size: IntParam | int = IntParam(11, "字体大小")
         self.auto_startup_wait_time: FloatParam | float = FloatParam(5.0, "自动启动等待时间")
+
+        self.auto_startup_show_console: BoolParam = BoolParam(False, "自动启动时显示控制台")
         self.install_kugou_lnk: ButtonParam = ButtonParam(
             desc="安装图标快捷方式 (需要管理员)",
             help_string="使得在SMTC页面出现 [🅺 Kugou] 而不是 [未知应用]\n"
                         r"文件位置在 [C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Kugou.lnk]"
         )
+        self.set_auto_startup: ButtonParam = ButtonParam(desc="设置开机启动")
+        self.delete_auto_startup: ButtonParam = ButtonParam(desc="取消开机启动")
 
 
 class ControlPanel(wx.Frame):
@@ -76,6 +83,8 @@ class ControlPanel(wx.Frame):
         self.first_run = True
         self.config = WEKConfig()
         self.config.install_kugou_lnk.handler = self.install_kugou_lnk
+        self.config.set_auto_startup.handler = self.add_wek_auto_startup
+        self.config.delete_auto_startup.handler = self.remove_wek_auto_startup
         self.config.load()
         self.read_config(first_load=True)
 
@@ -142,10 +151,29 @@ class ControlPanel(wx.Frame):
         self.config.update(config)
 
     @staticmethod
+    def add_wek_auto_startup():
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
+                             0, winreg.KEY_ALL_ACCESS)
+        winreg.SetValueEx(key, "WinEnchantKit", 0, winreg.REG_SZ,
+                          " ".join(sys.orig_argv))
+        wx.MessageBox("已添加开机启动项", "成功！ - ヾ(≧ ▽ ≦)ゝ", wx.OK | wx.ICON_INFORMATION)
+
+    @staticmethod
+    def remove_wek_auto_startup():
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
+                             0, winreg.KEY_ALL_ACCESS)
+        winreg.DeleteValue(key, "WinEnchantKit")
+        wx.MessageBox("已删除开机启动项", "成功！ - o(*￣▽￣*)o", wx.OK | wx.ICON_INFORMATION)
+
+    @staticmethod
     def install_kugou_lnk():
         program = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
         file_path = join(program, "Kugou.lnk")
-        base_executable_path = join(sys.base_prefix, "python.exe")
+        if "pythonw.exe" in sys.orig_argv[0]:
+            name = "pythonw.exe"
+        else:
+            name = "python.exe"
+        base_executable_path = join(sys.base_prefix, name)
         kugou_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\kugou")
         kugou_path = join(winreg.QueryValueEx(kugou_key, "KuGou8")[0], "KuGou.exe")
 
@@ -195,6 +223,7 @@ class ControlPanel(wx.Frame):
             self.refresh_button_state(item.GetId())
 
         if self.first_run:
+            self.first_run = False
             ret = wx.MessageBox("你是第一次运行WinEnchantKit, 是否创建SMTC支持快捷方式?\n"
                                 "这样就可以在SMTC页面中看到 [🅺 Kugou]\n\n"
                                 "也可稍后在程序设置中查看", "提示", wx.YES_NO | wx.ICON_QUESTION)
@@ -227,11 +256,11 @@ class ControlPanel(wx.Frame):
             wx.CallAfter(self.progress_dialog_func, msg, msg_queue)
             for i, (req, version) in enumerate(plugin_info["requirements"].items()):
                 msg_queue.put((0, msg.format(req, i, len(plugin_info["requirements"]))))
-                if req in self.packages:
+                if req in self.packages or self.packages == []:
                     continue
                 logger.debug(f"安装依赖 {req}")
                 result = self.inst_package_thread(req, version, [])
-                if result is False:
+                if not result:
                     msg_queue.put("STOP")
                     wx.MessageBox(f"安装依赖{req}失败，请手动安装依赖后再次尝试", "错误", wx.ICON_ERROR)
                     return False
