@@ -1,5 +1,4 @@
 import logging
-from logging import handlers
 
 
 class AnsiColorCodes:
@@ -58,10 +57,8 @@ def get_plugin_logger(id_: str, name: str):
     plugin_console_handler.setLevel(GLOBAL_LEVEL)
     plugin_console_handler.setFormatter(PluginFormatter(name))
     plugin_logger.addHandler(plugin_console_handler)
-    plugin_logger.addHandler(time_rotating_file_handler)
     return plugin_logger
 
-time_rotating_file_handler = handlers.TimedRotatingFileHandler(filename='rotating_test.log', when='D', encoding="utf-8")
 
 logger = logging.getLogger("WinEnchantKitLogger")
 logger.setLevel(GLOBAL_LEVEL)
@@ -69,4 +66,3 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(GLOBAL_LEVEL)
 console_handler.setFormatter(ColoredFormatter())
 logger.addHandler(console_handler)
-logger.addHandler(time_rotating_file_handler)

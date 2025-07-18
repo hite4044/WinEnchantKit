@@ -1,14 +1,18 @@
-import asyncio
-import json
-import logging
-import multiprocessing
 import sys
+from os.path import join, isfile, basename, exists, expandvars
+
+if "pythonw.exe" in sys.orig_argv[0] or "python.exe" not in sys.orig_argv[0]:
+    output = open(expandvars("%TEMP%\wek_log_53453174.txt"), "a+", encoding="utf-8")
+    sys.stdout = output
+    sys.stderr = output
+import json
+import multiprocessing
+import logging
 import winreg
 import pylnk3
 from dataclasses import dataclass
 from importlib import import_module
 from os import listdir
-from os.path import join, isfile, basename, exists
 from queue import Queue
 from subprocess import Popen, PIPE
 from sys import argv
@@ -29,7 +33,7 @@ from lib.log import logger, get_plugin_logger
 
 # ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(ctypes.c_wchar_p("WinEnchantKit"))
 
-async def get_packages():
+def get_packages():
     packages = []
     exec_ = executable
     if exec_.endswith("pythonw.exe") or not exec_.endswith("python.exe"):
@@ -90,7 +94,7 @@ class ControlPanel(wx.Frame):
 
         self.SetFont(ft(self.config.font_size))
         self.plugins_config = {}
-        self.packages = get_packages()
+        self.packages = []
         self.plugins: dict[str, PluginInfo] = {}
         self.auto_launch_plugins: list[str] = []
         self.sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -154,8 +158,10 @@ class ControlPanel(wx.Frame):
     def add_wek_auto_startup():
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
                              0, winreg.KEY_ALL_ACCESS)
-        winreg.SetValueEx(key, "WinEnchantKit", 0, winreg.REG_SZ,
-                          " ".join(sys.orig_argv))
+        cmd = " ".join(sys.orig_argv)
+        if not cmd.endswith(" -startup"):
+            cmd += " -startup"
+        winreg.SetValueEx(key, "WinEnchantKit", 0, winreg.REG_SZ, cmd)
         wx.MessageBox("已添加开机启动项", "成功！ - ヾ(≧ ▽ ≦)ゝ", wx.OK | wx.ICON_INFORMATION)
 
     @staticmethod
@@ -201,7 +207,7 @@ class ControlPanel(wx.Frame):
 
     def load_all_plugins(self):
         logger.info("加载插件中...")
-        self.packages = asyncio.run(self.packages)
+        # self.packages = get_packages()
         for dir_name in listdir("plugins"):
             logger.info(f"加载插件: [{dir_name}]")
             plugin_dir = join("plugins", dir_name)
@@ -508,7 +514,8 @@ class ControlPanel(wx.Frame):
 if __name__ == "__main__":
     app = wx.App()
     frame = ControlPanel(None)
-    frame.Show()
-    if len(argv) > 1 and argv[1] == "-startup":
+    if len(argv) > 1 and argv[-1] == "-startup":
         frame.show_or_hide()
+    else:
+        frame.Show()
     app.MainLoop()
