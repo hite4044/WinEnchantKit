@@ -411,6 +411,8 @@ class ControlPanel(wx.Frame):
         logger.info("退出时间到达限制 (4s), 触发大保底")
         for process in multiprocessing.active_children():
             process.terminate()
+        import ctypes
+        ctypes.windll.kernal32.ExitProcess(0)
         exit(0)
 
     def show_or_hide(self):
