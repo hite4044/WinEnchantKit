@@ -1,8 +1,10 @@
 import logging
+from os.path import expandvars
 from threading import Event, Thread
 
 import wx
 from win32.lib import win32con
+from typing import cast as type_cast
 from win32gui import SetWindowLong, GetWindowLong, GetWindowText
 
 from base import *
@@ -113,12 +115,36 @@ class Plugin(BasePlugin):
                                              DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW: "Acrylic (窗口模糊)",
                                              DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TABBEDWINDOW: "Mica Alt (桌面壁纸模糊 (更深))"
                                          }, "背景材质"),
+            "kugou_skin_alpha_zero": ButtonParam(desc="设置酷狗皮肤透明度为0 (先关闭酷狗)"),
         }
     )
     enable = False
     run_flag = False
     thread: Thread | None = None
     run_event = Event()
+
+    def __init__(self):
+        super().__init__()
+        t: ButtonParam = type_cast(ButtonParam, self.config.params["kugou_skin_alpha_zero"])
+        t.handler = self.set_zero_alpha
+
+    @staticmethod
+    def set_zero_alpha():
+        ini_path = expandvars("%APPDATA%\Kugou8\Kugou.ini")
+        with open(ini_path, "r", encoding="utf-16-le") as f:
+            lines = f.read().split("\n")
+        for i, line in enumerate(lines):
+            if line.startswith("Alpha="):
+                lines[i] = "Alpha=0"
+                break
+        else:
+            logger.info("找不到皮肤透明度配置行")
+            wx.MessageBox("找不到皮肤透明度配置行", "错误 - /_ \\", wx.OK | wx.ICON_ERROR)
+            return
+        with open(ini_path, "w", encoding="utf-16-le") as f:
+            f.write("\n".join(lines))
+        logger.info("已设置酷狗音乐皮肤的透明度为0")
+        wx.MessageBox("已设置酷狗音乐皮肤的透明度为0", "成功 - ヾ(≧▽≦*)o", wx.OK | wx.ICON_INFORMATION)
 
     def start(self):
         self.run_flag = True
