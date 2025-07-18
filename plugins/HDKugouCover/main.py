@@ -281,7 +281,8 @@ class Plugin(BasePlugin):
                 cover_url_full = transform_to_url(music_info, True)
                 song_hash = music_info["hash"]
                 self.cover_cache[song_id] = (song_hash, cover_url, cover_url_full)
-            except RuntimeError:
+            except RuntimeError as e:
+                logger.error(e)
                 return None
         return MusicData(song_hash, cover_url, cover_url_full)
 
@@ -294,19 +295,19 @@ class Plugin(BasePlugin):
         elif args.button == SMTCButton.NEXT:
             wait_result(self.kugou_session.try_skip_next_async())
         elif args.button == SMTCButton.PLAY:
-            wait_result(self.kugou_session.try_play_async())
-            if self.config.allways_playing:
-                return
-            self.smtc.playback_status = MediaPlaybackStatus.PLAYING
+            if not self.config.allways_playing:
+                self.smtc.playback_status = MediaPlaybackStatus.PLAYING
+            self.kugou_session.try_play_async()
         elif args.button == SMTCButton.PAUSE and self.is_fake_playing:
-            wait_result(self.kugou_session.try_play_async())
+            self.kugou_session.try_play_async()
             self.is_fake_playing = False
         elif args.button == SMTCButton.PAUSE:
-            wait_result(self.kugou_session.try_pause_async())
+            if not self.config.allways_playing:
+                self.smtc.playback_status = MediaPlaybackStatus.PAUSED
+            self.kugou_session.try_pause_async()
             if self.config.allways_playing:
                 self.is_fake_playing = True
                 return
-            self.smtc.playback_status = MediaPlaybackStatus.PAUSED
 
 
 if __name__ == "__main__":

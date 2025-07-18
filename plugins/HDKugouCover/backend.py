@@ -4,6 +4,9 @@ from typing import Any
 
 import requests
 import re
+
+import wx
+from requests.exceptions import SSLError
 from winsdk.windows.foundation import IAsyncOperation, AsyncStatus
 from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager as SessionManager, \
     GlobalSystemMediaTransportControlsSessionMediaProperties as SessionMediaProperties, \
@@ -41,12 +44,23 @@ def extract_music_title(title: str) -> tuple[str, str | None]:
     return title.strip(), other_name
 
 
+has_alert = False
+
+
 def search_for_song_list(title: str, artist: str) -> list[dict[str, Any]]:
+    global has_alert
     keyword = f"{title} {artist}"
     logger.debug(f"歌曲搜索关键字: \"{keyword}\"")
-    resp = requests.get(SEARCH_URL.format(keyword=keyword), headers=HEADERS, data=None)
+    try:
+        resp = requests.get(SEARCH_URL.format(keyword=keyword), headers=HEADERS, data=None)
+    except SSLError:
+        if not has_alert:
+            logger.error("系统代理有问题 (是工具的问题")
+            has_alert = True
+        raise RuntimeError("SSL错误")
     if resp.status_code != 200:
         raise RuntimeError(f"搜索失败: 服务器返回HTTP错误码 [{resp.status_code}]")
+    has_alert = False
     resp_json = resp.json()
     return resp_json["data"]["info"]
 
@@ -112,8 +126,10 @@ def get_kugou_session() -> Session:
 def get_kugou_info(session: Session) -> SessionMediaProperties:
     return wait_result(session.try_get_media_properties_async())
 
+
 if __name__ == "__main__":
     from lib.log import logger
+
     t_name = "MAGENTA POTION (Extended Mix)"
     t_artist = "EmoCosine"
     t_album = "Love Kills U"
