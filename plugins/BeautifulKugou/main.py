@@ -3,6 +3,7 @@ from os.path import expandvars
 from threading import Event, Thread
 
 import wx
+from PIL import Image
 from win32.lib import win32con
 from typing import cast as type_cast
 from win32gui import SetWindowLong, GetWindowLong, GetWindowText
@@ -115,7 +116,8 @@ class Plugin(BasePlugin):
                                              DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW: "Acrylic (窗口模糊)",
                                              DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TABBEDWINDOW: "Mica Alt (桌面壁纸模糊 (更深))"
                                          }, "背景材质"),
-            "kugou_skin_alpha_zero": ButtonParam(desc="设置酷狗皮肤透明度为0 (先关闭酷狗)"),
+            "kugou_skin_set_empty": ButtonParam(desc="设置酷狗皮肤背景为空 (需关闭酷狗)"),
+            "kugou_skin_alpha_zero": ButtonParam(desc="设置酷狗皮肤透明度为0 (需关闭酷狗)"),
         }
     )
     enable = False
@@ -127,10 +129,12 @@ class Plugin(BasePlugin):
         super().__init__()
         t: ButtonParam = type_cast(ButtonParam, self.config.params["kugou_skin_alpha_zero"])
         t.handler = self.set_zero_alpha
+        t: ButtonParam = type_cast(ButtonParam, self.config.params["kugou_skin_set_empty"])
+        t.handler = self.set_background_as_empty_alpha
 
     @staticmethod
     def set_zero_alpha():
-        ini_path = expandvars("%APPDATA%\Kugou8\Kugou.ini")
+        ini_path = expandvars(r"%APPDATA%\Kugou8\Kugou.ini")
         with open(ini_path, "r", encoding="utf-16-le") as f:
             lines = f.read().split("\n")
         for i, line in enumerate(lines):
@@ -144,6 +148,18 @@ class Plugin(BasePlugin):
         with open(ini_path, "w", encoding="utf-16-le") as f:
             f.write("\n".join(lines))
         logger.info("已设置酷狗音乐皮肤的透明度为0")
+        wx.MessageBox("已设置酷狗音乐皮肤的透明度为0", "成功 - ヾ(≧▽≦*)o", wx.OK | wx.ICON_INFORMATION)
+
+    @staticmethod
+    def set_background_as_empty_alpha():
+        back_path = expandvars(r"%APPDATA%\KuGou8\Skin10\Locale\9b021217810ab25b9e7b6abe07f4c742\back.png")
+        try:
+            image = Image.open(back_path)
+        except FileNotFoundError:
+            wx.MessageBox("未找到酷狗音乐皮肤的背景图片", "错误 - /_ \\", wx.OK | wx.ICON_ERROR)
+            return
+        new_back = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        new_back.save(back_path, "PNG")
         wx.MessageBox("已设置酷狗音乐皮肤的透明度为0", "成功 - ヾ(≧▽≦*)o", wx.OK | wx.ICON_INFORMATION)
 
     def start(self):

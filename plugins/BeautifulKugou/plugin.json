@@ -5,8 +5,9 @@
   "version": "1.2.0",
   "main_file": "main.py",
   "main_class": "Plugin",
-  "desc": "使得酷狗的窗口拥有圆角、背景透明模糊！",
+  "desc": "使得酷狗的窗口拥有圆角、背景透明模糊...！",
   "requirements": {
-    "pywin32": ""
+    "pywin32": "",
+    "pillow": ""
   }
 }
