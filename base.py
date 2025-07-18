@@ -74,9 +74,10 @@ class ChoiceParamPlus(ConfigParam):
 
 
 class ButtonParam(ConfigParam):
-    def __init__(self, handler: Callable[[], Any] = lambda: None, desc: str = ""):
+    def __init__(self, handler: Callable[[], Any] = lambda: None, desc: str = "", help_string: str = ""):
         super().__init__(ParamKind.BUTTON, True, bool, desc)
         self.handler: Callable[[], Any] = handler
+        self.help_string = help_string
 
 
 class TableParam(ConfigParam):

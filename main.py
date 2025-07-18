@@ -1,8 +1,10 @@
 import asyncio
 import json
 import logging
-import ctypes
 import multiprocessing
+import sys
+import winreg
+import pylnk3
 from dataclasses import dataclass
 from importlib import import_module
 from os import listdir
@@ -24,7 +26,8 @@ from gui.config import ConfigEditor
 from gui.font import ft
 from lib.log import logger, get_plugin_logger
 
-#ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(ctypes.c_wchar_p("WinEnchantKit"))
+
+# ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(ctypes.c_wchar_p("WinEnchantKit"))
 
 async def get_packages():
     packages = []
@@ -55,10 +58,26 @@ class PluginInfo:
     logger: logging.Logger
 
 
+class WEKConfig(ModuleConfigPlus):
+    def __init__(self):
+        super().__init__()
+        self.font_size: IntParam | int = IntParam(11, "字体大小")
+        self.install_kugou_lnk: ButtonParam = ButtonParam(
+            desc="安装图标快捷方式 (需要管理员)",
+            help_string="使得在SMTC页面出现 [🅺 Kugou] 而不是 [未知应用]\n"
+                        r"文件位置在 [C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Kugou.lnk]"
+        )
+
+
 class ControlPanel(wx.Frame):
     def __init__(self, parent: wx.Window | None):
         super().__init__(parent, size=(850, 450), title="WinEnchantKit管理面板")
-        self.SetFont(ft(11))
+        self.config = WEKConfig()
+        self.config.install_kugou_lnk.handler = self.install_kugou_lnk
+        self.config.load()
+        self.read_config(first_load=True)
+
+        self.SetFont(ft(self.config.font_size))
         self.plugins_config = {}
         self.packages = get_packages()
         self.plugins: dict[str, PluginInfo] = {}
@@ -77,12 +96,14 @@ class ControlPanel(wx.Frame):
         self.stop_btn = wx.Button(self.button_panel, label="停止")
         self.config_btn = wx.Button(self.button_panel, label="配置")
         self.auto_launch_cb = wx.CheckBox(self.button_panel, label="自动启动")
+        self.self_config_btn = wx.Button(self.button_panel, label="程序配置")
         self.exit_btn = wx.Button(self.button_panel, label="退出程序")
         self.button_panel.sizer.Add(self.start_btn, 0, wx.EXPAND)
         self.button_panel.sizer.Add(self.stop_btn, 0, wx.EXPAND)
         self.button_panel.sizer.Add(self.config_btn, 0, wx.EXPAND)
         self.button_panel.sizer.Add(self.auto_launch_cb, 0, wx.EXPAND | wx.LEFT, 2)
         self.button_panel.sizer.AddStretchSpacer()
+        self.button_panel.sizer.Add(self.self_config_btn, 0, wx.EXPAND)
         self.button_panel.sizer.Add(self.exit_btn, 0, wx.EXPAND)
         self.button_panel.SetSizer(self.button_panel.sizer)
         self.plugins_lc.SetMinSize(wx.Size(1920, 1080))
@@ -93,6 +114,7 @@ class ControlPanel(wx.Frame):
         self.stop_btn.Bind(wx.EVT_BUTTON, self.stop_plugin_gui)
         self.config_btn.Bind(wx.EVT_BUTTON, self.config_plugin_gui)
         self.auto_launch_cb.Bind(wx.EVT_CHECKBOX, self.auto_launch_gui)
+        self.self_config_btn.Bind(wx.EVT_BUTTON, self.on_config_self)
         self.exit_btn.Bind(wx.EVT_BUTTON, self.on_exit_gui)
         self.plugins_lc.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_item_selected)
         self.Bind(wx.EVT_CLOSE, self.on_close_window)
@@ -108,6 +130,41 @@ class ControlPanel(wx.Frame):
         self.Show()
         self.read_config()
         self.load_all_plugins_gui()
+
+    def on_config_self(self, _):
+        dialog = ConfigEditor(self, "WinEnchantKit", self.config, self.self_config_cbk)
+        dialog.ShowModal()
+        self.save_config()
+
+    def self_config_cbk(self, config):
+        self.config.update(config)
+
+    @staticmethod
+    def install_kugou_lnk():
+        program = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
+        file_path = join(program, "Kugou.lnk")
+        base_executable_path = join(sys.base_prefix, "python.exe")
+        kugou_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\kugou")
+        kugou_path = join(winreg.QueryValueEx(kugou_key, "KuGou8")[0], "KuGou.exe")
+
+        lnk = pylnk3.for_file(base_executable_path, icon_file=kugou_path, icon_index=0)
+        try:
+            lnk.save(file_path)
+            wx.MessageBox("创建快捷方式成功！\n记得重启程序哦", "成功！ - ( •̀ ω •́ )✧", wx.OK | wx.ICON_INFORMATION)
+            return
+        except OSError:
+            pass
+        ret = wx.MessageBox("权限不足, 是否保存至其他地方并自行移动至目标文件夹?",
+                            "搞砸啦！ - ㄟ( ▔, ▔ )ㄏ", wx.YES_NO | wx.ICON_WARNING)
+        if ret == wx.YES:
+            file_path = wx.FileSelector("请选择保存位置", "保存", "Kugou.lnk",
+                                        ".lnk", "*.lnk", wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
+            if file_path:
+                lnk.save(file_path)
+                wx.MessageBox("请移动lnk至 [C:\ProgramData\Microsoft\Windows\Start Menu\Programs]\n"
+                              "创建快捷方式成功！(虽说是保存到别处\n"
+                              "记得重启程序哦",
+                              "成功！ - (*^▽^*)", wx.OK | wx.ICON_INFORMATION)
 
     def load_all_plugins_gui(self):
         Thread(target=self.load_all_plugins, daemon=True).start()
@@ -371,6 +428,7 @@ class ControlPanel(wx.Frame):
     def save_config(self):
         config_fp = r".\config.json"
         config_data = {
+            "WEK_config": self.config.copy(),
             'auto_launch': self.auto_launch_plugins,
             'plugins': {}
         }
@@ -387,14 +445,17 @@ class ControlPanel(wx.Frame):
         except OSError:
             logger.error("无法保存配置文件")
 
-    def read_config(self):
+    def read_config(self, first_load: bool = False):
         config_fp = r".\config.json"
         if not exists(config_fp):
-            self.save_config()  # 创建空配置
+            if not first_load:
+                self.save_config()  # 创建空配置
             return
         try:
             with open(config_fp, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                if data.get("WEK_config"):
+                    self.self_config_cbk(data["WEK_config"])
                 self.auto_launch_plugins = data.get('auto_launch', [])
                 # 加载插件配置
                 self.plugins_config = data.get('plugins', {})

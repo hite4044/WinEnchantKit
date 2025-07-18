@@ -152,6 +152,7 @@ class ConfigLine(wx.Panel):
             # noinspection PyUnresolvedReferences
             self.input.Bind(wx.EVT_BUTTON, lambda _: param.handler())
             self.label.SetLabel("")
+            self.input.SetToolTip(param.help_string)
         elif param.kind == ParamKind.COLOR:  # 新增颜色类型处理
             self.input = ColorInputCtrl(parent, value)
         elif param.kind == ParamKind.LIST:
@@ -171,7 +172,7 @@ class ConfigLine(wx.Panel):
             return self.input.GetValue()
         elif self.param.kind == ParamKind.BUTTON:
             assert isinstance(self.param, ButtonParam)
-            return self.param.handler
+            return self.param.default
         elif self.param.kind == ParamKind.COLOR:  # 新增颜色类型处理
             assert isinstance(self.input, ColorInputCtrl)
             return self.input.get_value()
@@ -211,7 +212,7 @@ class ConfigEditor(wx.Dialog):
                 continue
             line = ConfigLine(self, param, config[name], use_sizer=False)
             if param.kind != ParamKind.LIST:
-                line.input.SetMinSize((200, 28))
+                line.input.SetMinSize((-1, 28))
             self.cfg_sizer.Add(line.label, 0, wx.EXPAND)
             self.cfg_sizer.Add(line.input, 1, wx.EXPAND)
             self.lines[name] = line
