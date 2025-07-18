@@ -45,8 +45,8 @@ class PluginConfig(ModuleConfigPlus):
                                                          ["480", "400", "240", "150", "120", "100", "64"],
                                                          "封面尺寸")
         self.use_max_size: BoolParam | bool = BoolParam(False, "使用最大封面尺寸")
-        self.allways_playing: BoolParam | bool = BoolParam(False, "永不暂停SMTC")
-        self.exchange_title2album: BoolParam | bool = BoolParam(False, "将专辑名替换为歌曲名")
+        self.allways_playing: BoolParam | bool = BoolParam(False, "永不暂停SMTC (暂停时总是切换会话时用)")
+        self.exchange_title2album: BoolParam | bool = BoolParam(False, "专辑名与作者名互换")
         self.default_title: StringParam | str = StringParam("Title", "默认标题")
         self.default_artist: StringParam | str = StringParam("Artist", "默认艺术家")
         self.default_album_title: StringParam | str = StringParam("Album Title", "默认专辑名")
