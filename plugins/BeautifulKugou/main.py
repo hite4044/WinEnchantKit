@@ -3,10 +3,11 @@ from os.path import expandvars
 from threading import Event, Thread
 
 import wx
+import pywintypes
 from PIL import Image
 from win32.lib import win32con
 from typing import cast as type_cast
-from win32gui import SetWindowLong, GetWindowLong, GetWindowText
+from win32gui import SetWindowLong, GetWindowLong, GetWindowText, GetClassName
 
 from base import *
 from dwm import *
@@ -187,9 +188,9 @@ class Plugin(BasePlugin):
                 break
             if kugou_launched:
                 try:
-                    GetWindowText(hwnd_cache)
+                    GetClassName(hwnd_cache)
                     continue
-                except OSError:
+                except pywintypes.error:
                     logger.info(f"窗口已关闭")
                     kugou_launched = False
 

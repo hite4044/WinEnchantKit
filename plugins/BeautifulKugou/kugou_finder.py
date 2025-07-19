@@ -1,6 +1,6 @@
 import win32con
 from win32api import GetWindowLong
-from win32gui import GetClassName, EnumWindows, GetWindowText
+from win32gui import GetClassName, EnumWindows, GetWindowText, FindWindow
 
 style_map: dict[int, str] = {
     getattr(win32con, name): name
@@ -50,6 +50,9 @@ def filter_hwnd(hwnds: list[int]) -> int | None:
     return None
 
 def get_main_kugou_window() -> int | None:
+    hwnd = FindWindow("kugou_ui", None)
+    if not hwnd:
+        return None
     hwnds = get_kugou_windows()
     if hwnds is None:
         return None
