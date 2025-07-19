@@ -14,8 +14,11 @@ from base import *
 
 name = "MC录屏提示"
 logger = logging.getLogger("WinEnchantKitLogger_mc_record_alert")
-pynvml.nvmlInit()
-atexit.register(pynvml.nvmlShutdown)
+try:
+    pynvml.nvmlInit()
+    atexit.register(pynvml.nvmlShutdown)
+except pynvml.NVMLError:
+    pass
 
 ProcessGPUsage = namedtuple("ProcessGPUsage", ["pid", "smUtil", "memUtil", "encUtil", "decUtil"])
 
