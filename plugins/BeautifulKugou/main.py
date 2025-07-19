@@ -86,7 +86,7 @@ class Plugin(BasePlugin):
             "inv_non_launched": FloatParam(2.0, "检查窗口的间隔时间"),
             "inv_launched": FloatParam(10.0, "酷狗启动后的检查间隔时间"),
 
-            "enable_set_composition": BoolParam(False, "设置窗口效果 (Win 10 16299+)"),
+            "enable_set_composition": BoolParam(True, "设置窗口效果 (Win 10 16299+)"),
             "accent_state": ChoiceParamPlus(ACCENT_STATE.ACCENT_ENABLE_ACRYLICBLURBEHIND,
                                             {
                                                 ACCENT_STATE.ACCENT_DISABLED: "禁用",
@@ -96,10 +96,10 @@ class Plugin(BasePlugin):
                                                 ACCENT_STATE.ACCENT_ENABLE_HOSTBACKDROP: "透明 (不带颜色)",
                                                 ACCENT_STATE.ACCENT_ENABLE_GRADIENT: "仅无透明度颜色",
                                             }, "模糊效果"),
-            "accent_color": ColorParam((0x2B, 0x2B, 0x2B), "模糊背景颜色"),
-            "accent_alpha": IntParam(152, "模糊背景透明度"),
+            "accent_color": ColorParam((0, 128, 255), "模糊背景颜色"),
+            "accent_alpha": IntParam(40, "模糊背景透明度"),
 
-            "enable_round_corner": BoolParam(False, "启用窗口圆角 (Win 11 22000+)"),
+            "enable_round_corner": BoolParam(True, "启用窗口圆角 (Win 11 22000+)"),
             "corner_type": ChoiceParamPlus(DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUND,
                                            {
                                                DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_DEFAULT: "默认",
