@@ -1,4 +1,5 @@
 import logging
+from xml.etree import ElementTree
 from os.path import expandvars
 from threading import Event, Thread
 
@@ -153,7 +154,20 @@ class Plugin(BasePlugin):
 
     @staticmethod
     def set_background_as_empty_alpha():
-        back_path = expandvars(r"%APPDATA%\KuGou8\Skin10\Locale\9b021217810ab25b9e7b6abe07f4c742\back.png")
+        skin_xml_fp = expandvars(r"%APPDATA%\KuGou8\Skin10\skin.xml")
+        tree = ElementTree.parse(skin_xml_fp)
+        root = tree.getroot()
+        skins_root = root.findall("LocalImages")
+        if not skins_root:
+            wx.MessageBox(f"全局皮肤信息文件有问题\nFile:{skin_xml_fp}", "错误 - ￣へ￣", wx.OK | wx.ICON_ERROR)
+        skins_root = skins_root[0]
+        for skin in skins_root.findall("Image"):
+            if skin.attrib["Name"] == "玄黛黑":
+                break
+        else:
+            wx.MessageBox(f"在本地皮肤里找不到玄黛黑, 请先应用一下吧\nFile:{skin_xml_fp}", "错误 - T_T", wx.OK | wx.ICON_ERROR)
+        
+        back_path = expandvars(rf"%APPDATA%\KuGou8\Skin10\Locale\{skin.attrib['Hash']}\back.png")
         try:
             image = Image.open(back_path)
         except FileNotFoundError:
