@@ -150,7 +150,6 @@ class ControlPanel(wx.Frame):
         self.SetIcon(self.window_icon)
         self.create_stray_icon()
         self.Show(show_window)
-        print(self.IsShown())
         self.read_config()
         self.load_all_plugins_gui()
 
@@ -292,16 +291,18 @@ class ControlPanel(wx.Frame):
         dialog.Pulse()
 
         def msg_thread():
+            wx.CallAfter(dialog.ShowModal)
             while True:
                 data = msg_queue.get(block=True)
                 if data == "STOP":
-                    dialog.EndModal(wx.ID_OK)
+                    wx.CallAfter(dialog.EndModal, wx.ID_OK)
                     break
                 value, format_args = data
                 wx.CallAfter(dialog.Update, value, msg.format(*format_args))
 
-        Thread(target=msg_thread, daemon=True).start()
-        dialog.ShowModal()
+        thread = Thread(target=msg_thread, daemon=True)
+        thread.start()
+        thread.join()
         dialog.Destroy()
 
     @staticmethod
