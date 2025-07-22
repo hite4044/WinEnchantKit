@@ -10,6 +10,7 @@ from threading import Event, Thread
 
 import wx
 from PIL import Image
+from PIL.PngImagePlugin import PngImageFile
 from winsdk.windows.foundation import Uri
 from winsdk.windows.media import SystemMediaTransportControls as SMTControls, \
     MediaPlaybackType, \
@@ -32,7 +33,7 @@ class MusicData:
     full_cover_url: str
 
 
-class CoverCacheFmt(Enum):
+class CoverCacheFmt(int):
     JPG = 0
     PNG = 1
     RAW_FORMAT = 2
@@ -221,12 +222,18 @@ class Plugin(BasePlugin):
                     content = resp.content
                     image = Image.open(BytesIO(content))
                     if self.config.cover_cache_format == CoverCacheFmt.JPG:
+                        image = image.convert("CMYK")
                         image.save(cover_cache_fp + ".jpg", "JPEG", quality=self.config.cover_cache_quality)
                     elif self.config.cover_cache_format == CoverCacheFmt.PNG:
+                        image = image.convert("RGBA")
                         image.save(cover_cache_fp + ".png", "PNG")
                     else:
-                        fmt = "JPEG" if content.startswith(b"\xFF\xD8\xFF") else "PNG"
-                        image.save(cover_cache_fp + (".jpg" if fmt == "JPEG" else ".png"), fmt)
+                        fmt = "PNG" if isinstance(image, PngImageFile) else "JPEG"
+                        if fmt == "JPEG":
+                            image.save(cover_cache_fp + ".jpg", "JPEG")
+                        else:
+                            image = image.convert("RGBA")
+                            image.save(cover_cache_fp + ".png", "PNG")
 
                 Thread(target=cover_save_thread).start()
                 uri = music.full_cover_url if self.config.use_max_size else music.cover_url
