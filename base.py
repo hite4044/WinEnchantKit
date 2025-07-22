@@ -23,6 +23,7 @@ class ConfigParam:
         self.default = default
         self.type = type_
         self.help_string = help_string
+        self.update_handler = lambda _: None
 
     def parse_value(self, value: Any) -> Any | None:
         try:
@@ -81,13 +82,32 @@ class ButtonParam(ConfigParam):
 
 
 class TableParam(ConfigParam):
-    def __init__(self, default: list[tuple] = None, desc: str = "", item_type: Type[Any] = str,
-                 headers: list[tuple[str, int]] = None):
+    def __init__(self, default: list[Any | list[Any]] = None, desc: str = "",
+                 item_types: list[Type[Any]] | Type[Any] = None,
+                 headers: list[tuple[str, int]] = None, default_line: tuple[str, ...] | None = None,
+                 pre_def_data: dict[str, list[Any]] | None = None):
+        nums = []
+        if default:
+            nums.extend([len(t) for t in default])
+        if item_types and isinstance(item_types, list):
+            nums.append(len(item_types))
+        if headers:
+            nums.append(len(headers))
+        if default_line:
+            nums.append(len(default_line))
+        assert len(set(nums)) == 1, "参数数量不一致"
+
+        if item_types is None:
+            item_types = [str]
+        elif not isinstance(item_types, list):
+            item_types = [item_types]
         if default is None:
             default = []
         super().__init__(ParamKind.LIST, default, list, desc)
         self.headers = headers
-        self.item_type = item_type
+        self.item_types = item_types
+        self.default_line = default_line
+        self.pre_def_data = pre_def_data
 
 
 class ListParam(TableParam):
@@ -121,6 +141,7 @@ class ModuleConfigPlus(ModuleConfig):
     def __init__(self):
         dict.__init__(self)
         self.names = []
+        self.hooks: dict[str, Callable[[Any], Any]] = {}
         self.end_collection = False
 
     def __setattr__(self, key, value):
@@ -131,16 +152,21 @@ class ModuleConfigPlus(ModuleConfig):
     def load(self):
         self.end_collection = True
         params = self.find_params()
-        self.params = params
+        self.params: dict[str, ConfigParam] = params
         self.update({copy(key): copy(param.default) for key, param in params.items()})
 
     def update(self, m, /, **kwargs):
         super().update(m, **kwargs)
         for key, value in m.items():
+            if key in self.hooks:
+                value = self.hooks[key](value)
             setattr(self, key, value)
 
     def find_params(self):
         return {name: getattr(self, name) for name in self.names}
+
+    def add_hook(self, name: str, func: Callable[[Any], Any]):
+        self.hooks[name] = func
 
 
 class BasePlugin:

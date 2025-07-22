@@ -497,6 +497,8 @@ class ControlPanel(wx.Frame):
             for key, value in plugin_info.main_class.config.items():
                 if type(value) in [str, int, float, bool, tuple, list, dict]:
                     prepare[key] = value
+                if isinstance(value, Enum):
+                    prepare[key] = value.value
             config_data['plugins'][plugin_id] = prepare
         try:
             content = json.dumps(config_data, indent=4, ensure_ascii=False)

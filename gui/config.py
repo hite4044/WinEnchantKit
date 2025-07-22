@@ -1,10 +1,10 @@
-from typing import Callable
-
 import wx
 
 from base import *
 from gui.center_text import CenteredText
 from gui.ect_menu import EtcMenu
+from gui.editable_listctrl import EditableListCtrl
+from gui.font import ft
 
 
 class ColorInputCtrl(wx.Panel):
@@ -63,7 +63,7 @@ class ColorInputCtrl(wx.Panel):
         return int(self.r_input.GetValue()), int(self.g_input.GetValue()), int(self.b_input.GetValue())
 
 
-class EditableListBox(wx.Panel):
+class EditableTable(wx.Panel):
     def __init__(self, parent: wx.Window, data: list, param: TableParam):
         super().__init__(parent=parent)
         self.param = param
@@ -72,19 +72,18 @@ class EditableListBox(wx.Panel):
         if not param.headers:
             style |= wx.LC_NO_HEADER
 
-        self.ctrl = wx.ListCtrl(self, style=style)
+        saved_font = self.GetFont()
+        self.SetFont(ft(9))
+        self.ctrl = EditableListCtrl(self, style=style)
+        self.SetFont(saved_font)
         self.add_btn = wx.Button(self.ctrl, label="+", size=(25, 25))
         self.remove_btn = wx.Button(self.ctrl, label="-", size=(25, 25))
 
         for head, width in headers:
             self.ctrl.AppendColumn(head, width=width)
-        for i, item in enumerate(data):
-            if not isinstance(item, tuple):
-                self.ctrl.InsertItem(i, str(item))
-            else:
-                self.ctrl.InsertItem(i, str(item[0]))
-                for j, content in enumerate(item[1:]):
-                    self.ctrl.SetItem(i, j + 1, str(content))
+            self.ctrl.EnableColumnEdit(self.ctrl.GetColumnCount() - 1)
+        self.update_data(data)
+        param.update_handler = self.update_data
 
         btn_sizer_ver = wx.BoxSizer(wx.VERTICAL)
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -101,15 +100,48 @@ class EditableListBox(wx.Panel):
 
         self.add_btn.Bind(wx.EVT_BUTTON, self.on_add)
         self.remove_btn.Bind(wx.EVT_BUTTON, self.on_remove)
+        self.ctrl.Bind(wx.EVT_LIST_ITEM_RIGHT_CLICK, self.on_menu)
+        self.ctrl.Bind(wx.EVT_RIGHT_DOWN, self.on_menu)
 
-    def on_menu(self, event: wx.ListEvent):
+    def update_data(self, data: Any):
+        self.ctrl.DeleteAllItems()
+        for i, item in enumerate(data):
+            if not isinstance(item, list):
+                self.ctrl.InsertItem(i, str(item))
+            else:
+                self.ctrl.InsertItem(i, str(item[0]))
+                for j, content in enumerate(item[1:] + list(self.param.default_line)[len(item):]):
+                    self.ctrl.SetItem(i, j + 1, str(content))
+
+    def on_menu(self, event: wx.ListEvent | wx.MouseEvent):
+        if isinstance(event, wx.MouseEvent):
+            row, flag = self.ctrl.HitTest(event.GetPosition())
+            if row != -1:
+                event.Skip()
+                return
         menu = EtcMenu()
-        index = event.GetIndex()
         menu.Append("添加", self.on_add)
-        menu.Append("删除", self.on_remove, None, index)
+        try:
+            index = event.GetIndex()
+            menu.Append("删除", self.on_remove, None, index)
+        except AttributeError:
+            pass
+        if self.param.pre_def_data:
+            menu.AppendSeparator()
+            for text, data in self.param.pre_def_data.items():
+                menu.Append(text, self.add_pre_data, data)
+        self.PopupMenu(menu)
+
+    def add_pre_data(self, data: list[Any]):
+        self.ctrl.InsertItem(self.ctrl.GetItemCount(), data[0])
+        for i, item in enumerate(data[1:] + list(self.param.default_line)[len(data):]):
+            self.ctrl.SetItem(self.ctrl.GetItemCount() - 1, i + 1, str(item))
 
     def on_add(self, _):
         self.ctrl.InsertItem(self.ctrl.GetItemCount(), "")
+        if self.param.default_line:
+            for i, item in enumerate(self.param.default_line):
+                self.ctrl.SetItem(self.ctrl.GetItemCount() - 1, i, str(item))
         self.ctrl.EditLabel(self.ctrl.GetItemCount() - 1)
 
     def on_remove(self, _, active_item: int = None):
@@ -117,13 +149,14 @@ class EditableListBox(wx.Panel):
             active_item = self.ctrl.GetFirstSelected() if not active_item else active_item
             self.ctrl.DeleteItem(active_item)
 
-    def get_value(self) -> list[str] | list[tuple[str, ...]]:
-        if self.param.headers:
-            return [
-                tuple(self.ctrl.GetItemText(i, j) for j in range(self.ctrl.GetColumnCount()))
-                for i in range(self.ctrl.GetItemCount())
-            ]
-        return [self.ctrl.GetItemText(i) for i in range(self.ctrl.GetItemCount())]
+    def get_value(self) -> list[Any] | list[list[Any]]:
+        data = [
+            [self.param.item_types[j](self.ctrl.GetItemText(i, j)) for j in range(self.ctrl.GetColumnCount())]
+            for i in range(self.ctrl.GetItemCount())
+        ]
+        if not self.param.headers:
+            return [item[0] for item in data]
+        return data
 
 
 class ConfigLine(wx.Panel):
@@ -139,11 +172,12 @@ class ConfigLine(wx.Panel):
             self.input = wx.CheckBox(parent)
             self.input.SetValue(value)
         elif param.kind == ParamKind.CHOICE:
-            assert isinstance(param, ChoiceParam) or isinstance(param, ChoiceParamPlus)
             if isinstance(param, ChoiceParamPlus):
+                assert isinstance(param, ChoiceParamPlus)
                 self.input = wx.Choice(parent, choices=param.choices)
                 self.input.Select(param.choices_values.index(value))
             else:
+                assert isinstance(param, ChoiceParam)
                 self.input = wx.ComboBox(parent, choices=param.choices)
                 self.input.SetStringSelection(value)
         elif param.kind == ParamKind.BUTTON:
@@ -156,11 +190,18 @@ class ConfigLine(wx.Panel):
             self.input = ColorInputCtrl(parent, value)
         elif param.kind == ParamKind.LIST:
             assert isinstance(param, TableParam)
-            self.input = EditableListBox(parent, value, param)
+            self.input = EditableTable(parent, value, param)
         else:
             self.input = wx.TextCtrl(parent, value=str(value))
-        self.label.SetToolTip(param.help_string)
-        self.input.SetToolTip(param.help_string)
+        wx.ToolTip.Enable(True)
+        wx.ToolTip.SetAutoPop(1000 * 60)  # 持续时间
+        wx.ToolTip.SetMaxWidth(114514)  # 最大宽度
+
+        tooltip = wx.ToolTip(param.help_string)
+        tooltip2 = wx.ToolTip(param.help_string)
+
+        self.label.SetToolTip(tooltip)
+        self.input.SetToolTip(tooltip2)
         if use_sizer:
             self.sizer = wx.BoxSizer(wx.HORIZONTAL)
             self.sizer.Add(self.label, 0, wx.EXPAND)
@@ -179,10 +220,8 @@ class ConfigLine(wx.Panel):
             return self.input.get_value()
         elif self.param.kind == ParamKind.LIST:
             assert isinstance(self.param, TableParam)
-            assert isinstance(self.input, EditableListBox)
-            if self.param.headers:
-                return self.input.get_value()
-            return list(map(self.param.item_type, self.input.get_value()))
+            assert isinstance(self.input, EditableTable)
+            return self.input.get_value()
         elif self.param.kind == ParamKind.CHOICE:
             assert isinstance(self.param, ChoiceParam) or isinstance(self.param, ChoiceParamPlus)
             assert isinstance(self.input, wx.ComboBox) or isinstance(self.input, wx.Choice)
@@ -206,8 +245,8 @@ class ConfigEditor(wx.Dialog):
                 self.sizer.AddSpacer(5)
         self.cfg_sizer = wx.FlexGridSizer(len(config), 2, 5, 5)
         self.cfg_sizer.AddGrowableCol(1, 1)
-        #self.cfg_sizer.SetFlexibleDirection(wx.HORIZONTAL) #所有水平行高度相等
         self.lines: dict[str, ConfigLine] = {}
+        current_row = 0
         for name, param in config.params.items():
             if param.kind == ParamKind.TIP:
                 continue
@@ -216,7 +255,10 @@ class ConfigEditor(wx.Dialog):
                 line.input.SetMinSize((-1, 28))
             self.cfg_sizer.Add(line.label, 0, wx.EXPAND)
             self.cfg_sizer.Add(line.input, 1, wx.EXPAND)
+            if isinstance(line.input, EditableTable):
+                self.cfg_sizer.AddGrowableRow(current_row, 1)
             self.lines[name] = line
+            current_row += 1
         self.sizer.Add(self.cfg_sizer, 1, wx.EXPAND)
         self.sizer.Add(wx.StaticLine(self, style=wx.LI_HORIZONTAL), 0, wx.EXPAND | wx.TOP | wx.LEFT | wx.RIGHT, 10)
 
