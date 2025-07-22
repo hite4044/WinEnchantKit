@@ -17,11 +17,12 @@ class ParamKind(Enum):
 
 
 class ConfigParam:
-    def __init__(self, kind: ParamKind, default: Any, type_: Type[Any], desc: str):
+    def __init__(self, kind: ParamKind, default: Any, type_: Type[Any], desc: str, help_string: str = ""):
         self.kind = kind
         self.desc = desc
         self.default = default
         self.type = type_
+        self.help_string = help_string
 
     def parse_value(self, value: Any) -> Any | None:
         try:
@@ -75,9 +76,8 @@ class ChoiceParamPlus(ConfigParam):
 
 class ButtonParam(ConfigParam):
     def __init__(self, handler: Callable[[], Any] = lambda: None, desc: str = "", help_string: str = ""):
-        super().__init__(ParamKind.BUTTON, True, bool, desc)
+        super().__init__(ParamKind.BUTTON, True, bool, desc, help_string)
         self.handler: Callable[[], Any] = handler
-        self.help_string = help_string
 
 
 class TableParam(ConfigParam):

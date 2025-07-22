@@ -152,7 +152,6 @@ class ConfigLine(wx.Panel):
             # noinspection PyUnresolvedReferences
             self.input.Bind(wx.EVT_BUTTON, lambda _: param.handler())
             self.label.SetLabel("")
-            self.input.SetToolTip(param.help_string)
         elif param.kind == ParamKind.COLOR:  # 新增颜色类型处理
             self.input = ColorInputCtrl(parent, value)
         elif param.kind == ParamKind.LIST:
@@ -160,6 +159,8 @@ class ConfigLine(wx.Panel):
             self.input = EditableListBox(parent, value, param)
         else:
             self.input = wx.TextCtrl(parent, value=str(value))
+        self.label.SetToolTip(param.help_string)
+        self.input.SetToolTip(param.help_string)
         if use_sizer:
             self.sizer = wx.BoxSizer(wx.HORIZONTAL)
             self.sizer.Add(self.label, 0, wx.EXPAND)
