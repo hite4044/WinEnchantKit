@@ -15,7 +15,6 @@ from sys import path
 from threading import Thread
 from time import sleep
 
-import pylnk3
 import pystray
 import wx
 from PIL import Image

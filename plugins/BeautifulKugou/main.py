@@ -1,14 +1,14 @@
 import logging
-from xml.etree import ElementTree
 from os.path import expandvars
 from threading import Event, Thread
+from typing import cast as type_cast
+from xml.etree import ElementTree
 
-import wx
 import pywintypes
+import wx
 from PIL import Image
 from win32.lib import win32con
-from typing import cast as type_cast
-from win32gui import SetWindowLong, GetWindowLong, GetWindowText, GetClassName
+from win32gui import SetWindowLong, GetWindowLong, GetClassName
 
 from base import *
 from dwm import *
@@ -160,13 +160,16 @@ class Plugin(BasePlugin):
         skins_root = root.findall("LocalImages")
         if not skins_root:
             wx.MessageBox(f"全局皮肤信息文件有问题\nFile:{skin_xml_fp}", "错误 - ￣へ￣", wx.OK | wx.ICON_ERROR)
+            return
         skins_root = skins_root[0]
         for skin in skins_root.findall("Image"):
             if skin.attrib["Name"] == "玄黛黑":
                 break
         else:
-            wx.MessageBox(f"在本地皮肤里找不到玄黛黑, 请先应用一下吧\nFile:{skin_xml_fp}", "错误 - T_T", wx.OK | wx.ICON_ERROR)
-        
+            wx.MessageBox(f"在本地皮肤里找不到玄黛黑, 请先应用一下这个皮肤吧\nFile:{skin_xml_fp}", "错误 - T_T",
+                          wx.OK | wx.ICON_ERROR)
+            return
+
         back_path = expandvars(rf"%APPDATA%\KuGou8\Skin10\Locale\{skin.attrib['Hash']}\back.png")
         try:
             image = Image.open(back_path)
