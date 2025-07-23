@@ -5,6 +5,7 @@ import sys
 import winreg
 from dataclasses import dataclass
 from importlib import import_module
+from typing import cast as type_cast
 from os import listdir
 from os.path import join, isfile, basename, exists
 from queue import Queue
@@ -65,13 +66,7 @@ class WEKConfig(ModuleConfigPlus):
         super().__init__()
         self.font_size: IntParam | int = IntParam(11, "字体大小")
         self.auto_startup_wait_time: FloatParam | float = FloatParam(5.0, "自动启动等待时间")
-
         self.auto_startup_show_console: BoolParam = BoolParam(False, "自动启动时显示控制台")
-        self.install_kugou_lnk: ButtonParam = ButtonParam(
-            desc="安装图标快捷方式 (需要管理员)",
-            help_string="使得在SMTC页面出现 [🅺 Kugou] 而不是 [未知应用]\n"
-                        r"文件位置在 [C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Kugou.lnk]"
-        )
         self.set_auto_startup: ButtonParam = ButtonParam(desc="设置开机启动")
         self.delete_auto_startup: ButtonParam = ButtonParam(desc="取消开机启动")
 
@@ -88,7 +83,6 @@ class ControlPanel(wx.Frame):
 
         # 加载工具配置
         self.config = WEKConfig()
-        self.config.install_kugou_lnk.handler = self.install_kugou_lnk
         self.config.set_auto_startup.handler = self.add_wek_auto_startup
         self.config.delete_auto_startup.handler = self.remove_wek_auto_startup
         self.config.load()
@@ -180,37 +174,6 @@ class ControlPanel(wx.Frame):
         winreg.DeleteValue(key, "WinEnchantKit")
         wx.MessageBox("已删除开机启动项", "成功！ - o(*￣▽￣*)o", wx.OK | wx.ICON_INFORMATION)
 
-    @staticmethod
-    def install_kugou_lnk():
-        program = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
-        file_path = join(program, "Kugou.lnk")
-        if "pythonw.exe" in sys.orig_argv[0]:
-            name = "pythonw.exe"
-        else:
-            name = "python.exe"
-        base_executable_path = join(sys.base_prefix, name)
-        kugou_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\kugou")
-        kugou_path = join(winreg.QueryValueEx(kugou_key, "KuGou8")[0], "KuGou.exe")
-
-        lnk = pylnk3.for_file(base_executable_path, icon_file=kugou_path, icon_index=0)
-        try:
-            lnk.save(file_path)
-            wx.MessageBox("创建快捷方式成功！\n记得重启程序哦", "成功！ - ( •̀ ω •́ )✧", wx.OK | wx.ICON_INFORMATION)
-            return
-        except OSError:
-            pass
-        ret = wx.MessageBox("权限不足, 是否保存至其他地方并自行移动至目标文件夹?",
-                            "搞砸啦！ - ㄟ( ▔, ▔ )ㄏ", wx.YES_NO | wx.ICON_WARNING)
-        if ret == wx.YES:
-            file_path = wx.FileSelector("请选择保存位置", "保存", "Kugou.lnk",
-                                        ".lnk", "*.lnk", wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
-            if file_path:
-                lnk.save(file_path)
-                wx.MessageBox("请移动lnk至 [C:\ProgramData\Microsoft\Windows\Start Menu\Programs]\n"
-                              "创建快捷方式成功！(虽说是保存到别处\n"
-                              "记得重启程序哦",
-                              "成功！ - (*^▽^*)", wx.OK | wx.ICON_INFORMATION)
-
     def load_all_plugins_gui(self):
         Thread(target=self.load_all_plugins, daemon=True).start()
 
@@ -242,9 +205,9 @@ class ControlPanel(wx.Frame):
             self.first_run = False
             ret = wx.MessageBox("你是第一次运行WinEnchantKit, 是否创建SMTC支持快捷方式?\n"
                                 "这样就可以在SMTC页面中看到 [🅺 Kugou]\n\n"
-                                "也可稍后在程序设置中查看", "提示", wx.YES_NO | wx.ICON_QUESTION)
+                                "也可稍后在插件[高清酷狗封面]的配置中查看", "提示", wx.YES_NO | wx.ICON_QUESTION)
             if ret == wx.YES:
-                self.install_kugou_lnk()
+                wx.CallAfter(type_cast(Any, self.plugins["hd_kugou_cover"].main_class).install_kugou_lnk)
 
     def load_plugin(self, plugin_dir: str):
         if isfile(join(plugin_dir, "plugin.json")):

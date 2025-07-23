@@ -2,13 +2,15 @@ import asyncio
 import json
 import os
 import string
+import sys
+import winreg
 from dataclasses import dataclass
 from io import BytesIO
 from os import makedirs
 from os.path import isdir, isfile, join, abspath
 from threading import Event, Thread
 
-import wx
+import pylnk3
 from PIL import Image
 from PIL.PngImagePlugin import PngImageFile
 from winsdk.windows.foundation import Uri
@@ -60,6 +62,11 @@ class PluginConfig(ModuleConfigPlus):
                                                                                     }, "封面缓存格式")
         self.refresh_info: ButtonParam | None = ButtonParam(desc="立即更新信息")
         self.clear_cache: ButtonParam | None = ButtonParam(desc="清除封面url缓存")
+        self.install_kugou_lnk: ButtonParam = ButtonParam(
+            desc="安装图标快捷方式 (需要管理员)",
+            help_string="使得在SMTC页面出现 [🅺 Kugou] 而不是 [未知应用]\n"
+                        r"文件位置在 [C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Kugou.lnk]"
+        )
 
 
 class Plugin(BasePlugin):
@@ -67,6 +74,7 @@ class Plugin(BasePlugin):
     def __init__(self):
         self.config = PluginConfig()
         self.config.refresh_info.handler = lambda: self.on_source_update(force_update=True)
+        self.config.install_kugou_lnk.handler = self.install_kugou_lnk
         self.config.clear_cache.handler = self.remove_cache
         self.config.load()
 
@@ -83,6 +91,39 @@ class Plugin(BasePlugin):
         self.source_changed_token = None
         self.button_pressed_token = None
         self.has_reg_event = False
+
+    @staticmethod
+    def install_kugou_lnk():
+        program = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
+        file_path = join(program, "Kugou.lnk")
+        if "pythonw.exe" in sys.orig_argv[0]:
+            exec_name = "pythonw.exe"
+        else:
+            exec_name = "python.exe"
+        base_executable_path = join(sys.base_prefix, exec_name)
+        kugou_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\kugou")
+        kugou_path = join(winreg.QueryValueEx(kugou_key, "KuGou8")[0], "KuGou.exe")
+
+        lnk = pylnk3.for_file(base_executable_path, icon_file=kugou_path, icon_index=0)
+        try:
+            lnk.save(file_path)
+            wx.MessageBox("创建快捷方式成功！\n记得重启程序哦", "成功！ - ( •̀ ω •́ )✧", wx.OK | wx.ICON_INFORMATION)
+            return
+        except OSError:
+            pass
+        ret = wx.MessageBox("权限不足, 是否保存至其他地方并自行移动至目标文件夹?",
+                            "搞砸啦！ - ㄟ( ▔, ▔ )ㄏ", wx.YES_NO | wx.ICON_WARNING)
+        if ret == wx.YES:
+            file_path = wx.FileSelector("请选择保存位置", "保存", "Kugou.lnk",
+                                        ".lnk", "*.lnk", wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
+            if file_path:
+                lnk.save(file_path)
+                os.startfile("C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs")
+                Thread(target=os.system, args=[f"explorer /select,{file_path}"], daemon=True).start()
+                wx.MessageBox("请移动lnk至 [C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs]\n"
+                              "创建快捷方式成功！(虽说是保存到别处\n"
+                              "记得重启程序哦",
+                              "成功！ - (*^▽^*)", wx.OK | wx.ICON_INFORMATION)
 
     def remove_cache(self):
         self.cover_cache.clear()
