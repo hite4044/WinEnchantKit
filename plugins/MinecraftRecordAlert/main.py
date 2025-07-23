@@ -9,6 +9,7 @@ import pynvml
 from win32con import MB_OK, MB_ICONWARNING
 from win32gui import GetForegroundWindow, MessageBox, GetClassName
 from win32process import GetWindowThreadProcessId
+from win10toast import ToastNotifier
 
 from base import *
 
@@ -53,11 +54,20 @@ class Plugin(BasePlugin):
             "alert_always": BoolParam(False, "提醒过后是否继续提醒"),
             "usage_thr": IntParam(2, "OBS录屏GPU占用阈值(包含)，单位为百分比: "),
             "obs_name": StringParam("obs64.exe", "OBS进程名 (不建议改动): "),
+            "use_toast": BoolParam(True, "使用Toast提醒, 避免对MC的游玩干扰"),
         }
     )
     thread = None
     running_flag = False
     enable = True
+    def __init__(self):
+        self.notifier = ToastNotifier()
+
+        raw_on_destroy = self.notifier.on_destroy
+        def on_destroy(*args):
+            raw_on_destroy(*args)
+            return 0
+        self.notifier.on_destroy = on_destroy
 
     def start(self):
         self.running_flag = True
@@ -117,7 +127,10 @@ class Plugin(BasePlugin):
                         if perf_counter() - obs_non_launch_timer > self.config["alert_time"]:
                             if not self.check_obs_recorded():
                                 logger.info(f"[{name}]: " + "检测到OBS仍未启动，弹出警告窗口...")
-                                MessageBox(hwnd, "检测到OBS未启动，请启动OBS", "警告", MB_OK | MB_ICONWARNING)
+                                if self.config["use_toast"]:
+                                    self.notifier.show_toast("警告", "检测到OBS未启动，请启动OBS", duration=5, threaded=True)
+                                else:
+                                    MessageBox(hwnd, "检测到OBS未启动，请启动OBS", "警告", MB_OK | MB_ICONWARNING)
                                 sleep(2)
                                 obs_non_launch_timer = perf_counter()
                                 if not self.config["alert_always"]:

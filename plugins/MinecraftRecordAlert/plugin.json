@@ -9,6 +9,7 @@
   "requirements": {
     "pynvml": "",
     "psutil": "",
-    "pywin32": ""
+    "pywin32": "",
+    "win10toast": ""
   }
 }
