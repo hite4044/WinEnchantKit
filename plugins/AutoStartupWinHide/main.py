@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import pywintypes
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import Thread, Event
@@ -231,12 +232,15 @@ class Plugin(BasePlugin):
             self.start()
 
     def parse_create_window(self, hwnd: int, is_static_check: bool = False, in_show_handler: bool = False):
-        if win32gui.GetParent(hwnd) != 0:
+        try:
+            if win32gui.GetParent(hwnd) != 0:
+                return
+            title = win32gui.GetWindowText(hwnd)
+            cls_name = win32gui.GetClassName(hwnd)
+            proc_pid = GetWindowThreadProcessId(hwnd)[1]
+            proc_name = psutil.Process(proc_pid).name()
+        except pywintypes.error:
             return
-        title = win32gui.GetWindowText(hwnd)
-        cls_name = win32gui.GetClassName(hwnd)
-        proc_pid = GetWindowThreadProcessId(hwnd)[1]
-        proc_name = psutil.Process(proc_pid).name()
 
         info_func = logger.info if self.config.debug_output else lambda _: None
         debug_func = logger.debug if self.config.debug_output else lambda _: None
@@ -284,6 +288,7 @@ class Plugin(BasePlugin):
                 self.do_action_window(hwnd, hide_way)
             else:
                 wx.CallAfter(wx.CallLater, int(info.action_dealy * 1000), self.do_action_window, hwnd, hide_way)
+        return
 
     @staticmethod
     def do_action_window(hwnd: int, hide_way: HideWay):
