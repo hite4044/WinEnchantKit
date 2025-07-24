@@ -58,8 +58,12 @@ class AboutDialog(wx.Frame):
         self.sizer.AddSpacer(5)
 
         self.progress = cwx.ProgressBar(self)
+        self.progress.SetMinSize((-1, 41))
         self.progress.SetValue(90)
         self.sizer.Add(self.progress, 0, wx.EXPAND)
+        self.sizer.AddSpacer(5)
+
+        self.sizer.Add(cwx.StaticText(self, label="This is CustomWxpython!"))
         self.sizer.AddSpacer(5)
 
         self.SetSizer(self.sizer)
