@@ -226,7 +226,7 @@ class Plugin(BasePlugin):
         return song_id != ""
 
     def default(self):
-        if not self.enable:
+        if not self.smtc:
             wx.MessageBox("请先启用插件", "WinEnchantKit - 高清酷狗封面", wx.OK | wx.ICON_WARNING)
             return
         self.update_smtc_info(self.config.default_title, self.config.default_artist,
