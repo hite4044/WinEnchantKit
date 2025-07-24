@@ -6,6 +6,9 @@ requests==2.32.3
 pywin32==308
 psutil==6.1.1
 pynvml==12.0.0
-nvidia-ml-py==12.570.86
 pynput==1.8.1
 pylnk3==0.4.3
+win10toast==0.9
+
+pywinstyles==1.8
+colour==0.1.5

@@ -5,7 +5,6 @@ import sys
 import winreg
 from dataclasses import dataclass
 from importlib import import_module
-from typing import cast as type_cast
 from os import listdir
 from os.path import join, isfile, basename, exists
 from queue import Queue
@@ -14,14 +13,17 @@ from sys import executable
 from sys import path
 from threading import Thread
 from time import sleep
+from typing import cast as type_cast
 
 import pystray
 import wx
 from PIL import Image
 
 from base import *
+from gui.about_dialog import AboutDialog
 from gui.config import ConfigEditor
 from gui.font import ft
+from gui.win_icon import set_multi_size_icon
 from lib.log import logger, get_plugin_logger
 from lib.perf import Counter
 
@@ -78,7 +80,7 @@ class ControlPanel(wx.Frame):
         self.first_run = True
         self.has_exited = False
         self.stray_icon: pystray.Icon = None
-        self.stray_icon_image = Image.open("assets/icon2.png")
+        self.stray_icon_image = Image.open("assets/icon.png")
 
         # 加载工具配置
         self.config = WEKConfig()
@@ -109,6 +111,7 @@ class ControlPanel(wx.Frame):
         self.stop_btn = wx.Button(self.button_panel, label="停止")
         self.config_btn = wx.Button(self.button_panel, label="配置")
         self.auto_launch_cb = wx.CheckBox(self.button_panel, label="自动启动")
+        self.about_dialog_btn = wx.Button(self.button_panel, label="关于")
         self.self_config_btn = wx.Button(self.button_panel, label="程序配置")
         self.exit_btn = wx.Button(self.button_panel, label="退出程序")
         self.button_panel.sizer.Add(self.start_btn, 0, wx.EXPAND)
@@ -116,6 +119,7 @@ class ControlPanel(wx.Frame):
         self.button_panel.sizer.Add(self.config_btn, 0, wx.EXPAND)
         self.button_panel.sizer.Add(self.auto_launch_cb, 0, wx.EXPAND | wx.LEFT, 2)
         self.button_panel.sizer.AddStretchSpacer()
+        self.button_panel.sizer.Add(self.about_dialog_btn, 0, wx.EXPAND)
         self.button_panel.sizer.Add(self.self_config_btn, 0, wx.EXPAND)
         self.button_panel.sizer.Add(self.exit_btn, 0, wx.EXPAND)
         self.button_panel.SetSizer(self.button_panel.sizer)
@@ -129,6 +133,7 @@ class ControlPanel(wx.Frame):
         self.stop_btn.Bind(wx.EVT_BUTTON, self.stop_plugin_gui)
         self.config_btn.Bind(wx.EVT_BUTTON, self.config_plugin_gui)
         self.auto_launch_cb.Bind(wx.EVT_CHECKBOX, self.auto_launch_gui)
+        self.about_dialog_btn.Bind(wx.EVT_BUTTON, self.on_about_dialog)
         self.self_config_btn.Bind(wx.EVT_BUTTON, self.on_config_self)
         self.exit_btn.Bind(wx.EVT_BUTTON, self.on_exit_gui)
         self.plugins_lc.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_item_selected)
@@ -137,14 +142,15 @@ class ControlPanel(wx.Frame):
         self.start_btn.Disable()
         self.stop_btn.Disable()
 
-        self.window_icon = wx.Icon()
-        self.window_icon.LoadFile("assets/icon2.png", wx.BITMAP_TYPE_PNG)
-
-        self.SetIcon(self.window_icon)
+        set_multi_size_icon(self, "assets/icon.png", Image.Resampling.BICUBIC)
         self.create_stray_icon()
         self.Show(show_window)
         self.read_config()
         self.load_all_plugins_gui()
+
+    def on_about_dialog(self, _):
+        dialog = AboutDialog(self)
+        dialog.Show()
 
     def on_config_self(self, _):
         dialog = ConfigEditor(self, "WinEnchantKit", self.config, self.self_config_cbk)
