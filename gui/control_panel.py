@@ -167,7 +167,8 @@ class ControlPanel(wx.Frame):
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
                              0, winreg.KEY_ALL_ACCESS)
         args = [sys.executable] + sys.argv
-        print(args)
+        if args[0].endswith("WinEnchantKit.exe"):
+            args = [sys.executable]
         cmd = " ".join(args)
         if not cmd.endswith(" -startup"):
             cmd += " -startup"
