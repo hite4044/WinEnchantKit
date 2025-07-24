@@ -127,7 +127,11 @@ class Plugin(BasePlugin):
 
     def remove_cache(self):
         self.cover_cache.clear()
-        file_list = os.listdir("cache/kugou_music_covers")
+        try:
+            file_list = os.listdir("cache/kugou_music_covers")
+        except FileNotFoundError:
+            wx.MessageBox("缓存文件夹不存在", "错误", wx.OK | wx.ICON_ERROR)
+            return
         all_length = len(file_list)
         dialog = wx.ProgressDialog("正在删除缓存", "请稍候...", 100, None, wx.CENTRE | wx.RESIZE_BORDER)
         for i, file in enumerate(file_list):
@@ -179,9 +183,10 @@ class Plugin(BasePlugin):
 
     def update_config(self, _, new_config: dict[str, Any]):
         self.config.load_values(new_config)
-        if self.config.allways_playing:
-            self.smtc.playback_status = MediaPlaybackStatus.PLAYING
-        self.on_source_update(force_update=True)
+        if self.enable:
+            if self.config.allways_playing:
+                self.smtc.playback_status = MediaPlaybackStatus.PLAYING
+            self.on_source_update(force_update=True)
 
     def stop(self):
         self.save_cache()
@@ -221,6 +226,9 @@ class Plugin(BasePlugin):
         return song_id != ""
 
     def default(self):
+        if not self.enable:
+            wx.MessageBox("请先启用插件", "WinEnchantKit - 高清酷狗封面", wx.OK | wx.ICON_WARNING)
+            return
         self.update_smtc_info(self.config.default_title, self.config.default_artist,
                               self.config.default_album_title, self.config.default_album_artist, None)
 
