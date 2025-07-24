@@ -10,8 +10,8 @@ class StaticText(Widget):
     style: WidgetStyle
     text_color: wx.Colour
 
-    def __init__(self, parent: wx.Window, label: str, widget_style: WidgetStyle = None):
-        super().__init__(parent, widget_style=widget_style)
+    def __init__(self, parent: wx.Window, label: str, style=0, widget_style: WidgetStyle = None):
+        super().__init__(parent, style, widget_style)
         self.SetLabel(label)
 
     def SetLabel(self, label: str):
@@ -24,7 +24,6 @@ class StaticText(Widget):
         self.SetSize((width, height))
         self.SetMinSize((width, height))
         self.CacheBestSize(self.GetSize())
-        print(self.GetSize())
 
     def SetFont(self, font):
         super().SetFont(font)
