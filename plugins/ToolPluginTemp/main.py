@@ -14,7 +14,7 @@ class PluginConfig(ModuleConfigPlus):
         self.float: FloatParam | float = FloatParam(0.0, "浮点数")
         self.bool: BoolParam | bool = BoolParam(False, "布尔值")
         self.string: StringParam | str = StringParam("", "字符串")
-        self.choice_old: ChoiceParam | str = ChoiceParam(0, ["0", "1"], "旧版选择 (字符串)")
+        self.choice_old: ChoiceParam | str = ChoiceParam("0", ["0", "1"], "旧版选择 (字符串)")
         self.choice: ChoiceParamPlus | int = ChoiceParamPlus(0, {0: "0", 1: "1"}, "选择")
         self.list: ListParam | list[str] = ListParam(["0", "1"], "列表")
         self.load()

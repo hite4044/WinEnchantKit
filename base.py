@@ -63,7 +63,7 @@ class FloatParam(ConfigParam):
 
 
 class ChoiceParam(ConfigParam):
-    def __init__(self, default: Any, choices: list[Any], desc: str):
+    def __init__(self, default: str, choices: list[Any], desc: str):
         super().__init__(ParamKind.CHOICE, default, str, desc)
         self.choices = choices
 
