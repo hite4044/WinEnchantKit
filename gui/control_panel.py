@@ -144,6 +144,8 @@ class ControlPanel(wx.Frame):
 
         set_multi_size_icon(self, "assets/icon.png", Image.Resampling.BICUBIC)
         self.create_stray_icon()
+        if not show_window and self.stray_icon is not None:
+            self.stray_icon.run_detached()
         self.Show(show_window)
         self.read_config()
         self.load_all_plugins_gui()
