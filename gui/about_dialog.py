@@ -4,7 +4,6 @@ import webbrowser
 import wx
 
 import cwx
-from cwx import DefaultColors
 from gui.font import ft
 from plugins.BeautifulKugou.dwm import ACCENT_POLICY, ACCENT_STATE, WINDOWCOMPOSITIONATTRIBDATA, \
     WINDOWCOMPOSITIONATTRIB, SetWindowCompositionAttribute, DwmExtendFrameIntoClientArea, MARGINS, DWM_BLURBEHIND, \
@@ -17,7 +16,7 @@ class AboutDialog(wx.Frame):
     def __init__(self, parent: wx.Window | None):
         super().__init__(parent, title="关于", size=(650, 600),
                          style=wx.CAPTION | wx.SYSTEM_MENU | wx.RESIZE_BORDER | wx.MINIMIZE_BOX | wx.CLOSE_BOX | wx.MAXIMIZE_BOX)
-        self.blur()
+        self.set_window_blur()
         self.SetIcon(wx.Icon("assets/icon.ico", wx.BITMAP_TYPE_ICO))
         self.SetFont(ft(12))
 
@@ -30,7 +29,7 @@ class AboutDialog(wx.Frame):
         texts = [("Win", (37, 182, 233)), ("Enchant", (202, 90, 204)), ("Kit", (255, 127, 39))]
         for text, color in texts:
             st = cwx.StaticText(self, label=text)
-            st.SetFont(ft(18))
+            st.SetFont(ft(30))
             st.SetForegroundColour(wx.Colour(color))
             text_sizer.Add(st)
         text_sizer.AddStretchSpacer()
@@ -47,40 +46,41 @@ class AboutDialog(wx.Frame):
             self.sizer.Add(text, 0, wx.ALIGN_CENTER_HORIZONTAL)
 
         btn = cwx.Button(self, label="查看BiliBili宣传视频")
-        btn.Bind(wx.EVT_BUTTON, self.open_bilibili_video)
+        btn.Bind(wx.EVT_BUTTON, self.open_project_bilibili_video)
         self.sizer.Add(btn)
         self.sizer.AddSpacer(5)
 
-        text_ctrl = cwx.TextCtrl(self, "输入pwd查看内容")
-        text_ctrl.SetMinSize((-1, 50))
-        text_ctrl.load_widget_style(text_ctrl.style.桃子)
-        text_ctrl.Bind(cwx.EVT_TEXT, self.check_pwd)
-        self.sizer.Add(text_ctrl, 0, wx.EXPAND)
+        self.tc = cwx.TextCtrl(self, "输入pwd查看内容")
+        self.tc.SetMinSize((-1, 50))
+        self.tc.load_widget_style(self.tc.style.桃子)
+        self.tc.Bind(cwx.EVT_TEXT, self.on_text)
+        self.sizer.Add(self.tc, 0, wx.EXPAND)
         self.sizer.AddSpacer(5)
-        self.tc = text_ctrl
 
-        progress = cwx.ProgressBar(self)
-        progress.SetValue(30)
-        self.sizer.Add(progress, 0, wx.EXPAND)
+        self.progress = cwx.ProgressBar(self)
+        self.progress.SetValue(90)
+        self.sizer.Add(self.progress, 0, wx.EXPAND)
         self.sizer.AddSpacer(5)
 
         self.SetSizer(self.sizer)
 
-    def open_bilibili_video(self, _):
+    @staticmethod
+    def open_project_bilibili_video(_):
         wx.MessageBox("还没有做好呢qwq", "提示", style=wx.OK | wx.ICON_INFORMATION)
         # webbrowser.open("")
 
-    def check_pwd(self, _):
+    def on_text(self, _):
         if self.tc.text == "pwd":
-            self.open_bilibili_video2()
+            self.open_secret_video()
+        self.progress.SetValue(max(min(len(self.tc.text) / 10 * 100, 100), 0))
 
     @staticmethod
-    def open_bilibili_video2():
+    def open_secret_video():
         webbrowser.open("https://www.bilibili.com/video/BV1GJ411x7h7")
 
-    def blur(self):
+    def set_window_blur(self):
         self.SetBackgroundColour(wx.BLACK)
-        color = DefaultColors.SYSTEM_COLOR + (30,)
+        color = (0, 0, 0, 50)
 
         DwmSetWindowAttribute(self.GetHandle(), 20, ctypes.byref(ctypes.c_int(1)), ctypes.sizeof(ctypes.c_int))
         bb = DWM_BLURBEHIND(
