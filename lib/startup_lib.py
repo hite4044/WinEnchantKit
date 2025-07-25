@@ -22,12 +22,19 @@ cmd_temp = " ".join(
 )
 
 
-def get_auto_startup_cmd() -> str:
+def get_auto_startup_cmd(show_console: bool = False) -> str:
     if IS_PACKAGE_ENV:
         parent_dir = os.path.split(os.getcwd())[0]
-        args = [os.path.join(parent_dir, "WinEnchantKit.exe"), *sys.argv[1:]]
+        if show_console:
+            args = [os.path.join(parent_dir, "WinEnchantKitCmd.exe"), *sys.argv[1:]]
+        else:
+            args = [os.path.join(parent_dir, "WinEnchantKit.exe"), *sys.argv[1:]]
     else:
         args = [sys.executable.replace("python.exe", "pythonw.exe")] + sys.argv
+        if show_console:
+            args[0].replace("pythonw.exe", "python.exe")
+        else:
+            args[0].replace("python.exe", "pythonw.exe")
     if "-startup" not in args:
         args.append("-startup")
     return " ".join(args)
@@ -45,7 +52,7 @@ def create_task():
         with open(startup_file, "w", encoding="gbk") as f:
             f.write("\n".join([
                 f"cd /D {os.getcwd()}",
-                get_auto_startup_cmd()
+                f"start {get_auto_startup_cmd()}"
             ]))
 
     cmd = cmd_temp.format(startup_file)
