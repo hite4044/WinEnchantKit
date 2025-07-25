@@ -35,6 +35,7 @@ def get_proc_gpu_perf(pid: int):
                 encUtil=info.encUtil,
                 decUtil=info.decUtil,
             )
+    return None
 
 
 def is_minecraft_window(hwnd: int) -> bool:
@@ -102,7 +103,7 @@ class Plugin(BasePlugin):
         obs_non_launch_timer = 0
         alerted = False
         try:
-            logger.info(f"[{name}]: " + "线程已启动")
+            logger.info("线程已启动")
             while self.running_flag:
                 for _ in range(int(self.config["check_inv"] / 0.5)):
                     sleep(0.5)
@@ -116,17 +117,17 @@ class Plugin(BasePlugin):
                     continue
                 if is_minecraft_window(hwnd):  # 正在游玩MC
                     if not minecraft_running:  # MC刚刚启动
-                        logger.info(f"[{name}]: " + "正在游玩MC")
+                        logger.info("正在游玩MC")
                         minecraft_running = True
                         obs_non_launch_timer = perf_counter()
                         alerted = False
                     else:  # MC已经启动
                         if alerted:
                             continue
-                        logger.info(f"[{name}]: " + f"MC已游玩 {round(perf_counter() - obs_non_launch_timer, 2)} 秒")
+                        logger.info(f"MC已游玩 {round(perf_counter() - obs_non_launch_timer, 2)} 秒")
                         if perf_counter() - obs_non_launch_timer > self.config["alert_time"]:
                             if not self.check_obs_recorded():
-                                logger.info(f"[{name}]: " + "检测到OBS仍未启动，弹出警告窗口...")
+                                logger.info("检测到OBS仍未启动，弹出警告窗口...")
                                 if self.config["use_toast"]:
                                     self.notifier.show_toast("警告", "检测到OBS未启动，请启动OBS", duration=5, threaded=True)
                                 else:
@@ -136,14 +137,14 @@ class Plugin(BasePlugin):
                                 if not self.config["alert_always"]:
                                     alerted = True
                             else:
-                                logger.info(f"[{name}]: " + "检测到OBS已启动，不弹出警告窗口")
+                                logger.info("检测到OBS已启动，不弹出警告窗口")
                                 alerted = True
 
                 elif minecraft_running:  # 没有在游玩MC
-                    logger.info(f"[{name}]: " + "没有在游玩MC")
+                    logger.info("没有在游玩MC")
                     minecraft_running = False
                     obs_non_launch_timer = 0
                     alerted = False
         except KeyboardInterrupt:
             pass
-        logger.info(f"[{name}]: " + "线程已退出")
+        logger.info("线程已退出")
