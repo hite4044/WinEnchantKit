@@ -1,0 +1,1 @@
+IS_PACKAGE_ENV = False

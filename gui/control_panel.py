@@ -2,8 +2,7 @@ import json
 import logging
 import multiprocessing
 import os
-import sys
-import winreg
+import random
 from dataclasses import dataclass
 from importlib import import_module
 from os import listdir
@@ -25,6 +24,7 @@ from gui.about_dialog import AboutDialog
 from gui.config import ConfigEditor
 from gui.font import ft
 from gui.win_icon import set_multi_size_icon
+from lib import startup_lib
 from lib.log import logger, get_plugin_logger
 from lib.perf import Counter
 
@@ -69,12 +69,17 @@ class WEKConfig(ModuleConfigPlus):
         self.font_size: IntParam | int = IntParam(11, "字体大小")
         self.auto_startup_wait_time: FloatParam | float = FloatParam(5.0, "自动启动等待时间")
         self.auto_startup_show_console: BoolParam = BoolParam(False, "自动启动时显示控制台")
-        self.set_auto_startup: ButtonParam = ButtonParam(desc="设置开机启动")
-        self.delete_auto_startup: ButtonParam = ButtonParam(desc="取消开机启动")
+        self.set_reg_startup: ButtonParam = ButtonParam(desc="设置注册表开机启动")
+        self.delete_reg_startup: ButtonParam = ButtonParam(desc="取消注册表开机启动")
+        self.set_task_startup: ButtonParam = ButtonParam(desc="设置任务计划开机启动 (更快)")
+        self.delete_task_startup: ButtonParam = ButtonParam(desc="取消任务计划开机启动")
         self.open_log_dir: ButtonParam = ButtonParam(desc="打开日志目录")
 
 
 class ControlPanel(wx.Frame):
+    SUCCESS_ENDS = ["o(*￣▽￣*)o", "ヾ(≧ ▽ ≦)ゝ", "(≧∇≦)ﾉ"]
+    FAILED_ENDS = ["(⊙▃⊙;)?", "〒▽〒", "o(TヘTo)"]
+
     def __init__(self, parent: wx.Window | None, show_window: bool = True):
         super().__init__(parent, size=(860, 450), title="WinEnchantKit管理面板")
 
@@ -86,8 +91,10 @@ class ControlPanel(wx.Frame):
 
         # 加载工具配置
         self.config = WEKConfig()
-        self.config.set_auto_startup.handler = self.add_wek_auto_startup
-        self.config.delete_auto_startup.handler = self.remove_wek_auto_startup
+        self.config.set_reg_startup.handler = self.add_reg_auto_startup
+        self.config.delete_reg_startup.handler = self.remove_reg_auto_startup
+        self.config.set_task_startup.handler = self.add_task_auto_startup
+        self.config.delete_task_startup.handler = self.remove_task_auto_startup
         self.config.open_log_dir.handler = self.open_log_dir
         self.config.load()
         self.read_config(first_load=True)
@@ -169,25 +176,28 @@ class ControlPanel(wx.Frame):
     def open_log_dir():
         os.startfile(expandvars("%APPDATA%/WinEnchantKit/logs"))
 
-    @staticmethod
-    def add_wek_auto_startup():
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
-                             0, winreg.KEY_ALL_ACCESS)
-        args = [sys.executable] + sys.argv
-        if args[0].endswith("WinEnchantKit.exe"):
-            args = [sys.executable]
-        cmd = " ".join(args)
-        if not cmd.endswith(" -startup"):
-            cmd += " -startup"
-        winreg.SetValueEx(key, "WinEnchantKit", 0, winreg.REG_SZ, cmd)
-        wx.MessageBox("已添加开机启动项", "成功！ - ヾ(≧ ▽ ≦)ゝ", wx.OK | wx.ICON_INFORMATION)
+    def add_reg_auto_startup(self):
+        self.run_func_with_error_dialog(startup_lib.create_reg, "已添加注册表开机启动项", "添加开机启动项失败")
 
-    @staticmethod
-    def remove_wek_auto_startup():
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
-                             0, winreg.KEY_ALL_ACCESS)
-        winreg.DeleteValue(key, "WinEnchantKit")
-        wx.MessageBox("已删除开机启动项", "成功！ - o(*￣▽￣*)o", wx.OK | wx.ICON_INFORMATION)
+    def remove_reg_auto_startup(self):
+        self.run_func_with_error_dialog(startup_lib.remove_reg, "已删除注册表开机启动项", "删除开机启动项失败")
+
+    def add_task_auto_startup(self):
+        self.run_func_with_error_dialog(startup_lib.create_task, "已添加计划任务开机启动项", "添加开机启动项失败")
+
+    def remove_task_auto_startup(self):
+        self.run_func_with_error_dialog(startup_lib.remove_task, "已删除计划任务开机启动项", "删除开机启动项失败")
+
+    def run_func_with_error_dialog(self, func, success_msg: str, failed_msg: str):
+        try:
+            func()
+            end = self.SUCCESS_ENDS[random.randint(0, len(self.SUCCESS_ENDS) - 1)]
+            wx.MessageBox(f"{success_msg}\n{end}", f"成功！- {end}", wx.OK | wx.ICON_INFORMATION)
+        except Exception as e:
+            end = self.FAILED_ENDS[random.randint(0, len(self.FAILED_ENDS) - 1)]
+            wx.MessageBox(f"{e.__class__.__name__}: {e}\n{failed_msg}",
+                          f"失败啦~ - {end}",
+                          wx.OK | wx.ICON_ERROR)
 
     def load_all_plugins_gui(self):
         Thread(target=self.load_all_plugins, daemon=True).start()
