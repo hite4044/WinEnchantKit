@@ -1,7 +1,7 @@
 import os
 import sys
 import winreg
-from os.path import expandvars
+from os.path import expandvars, abspath
 
 import win32con as con
 from win32comext.shell.shell import ShellExecuteEx
@@ -30,7 +30,7 @@ def get_auto_startup_cmd(show_console: bool = False) -> str:
         else:
             args = [os.path.join(parent_dir, "WinEnchantKit.exe"), *sys.argv[1:]]
     else:
-        args = [sys.executable.replace("python.exe", "pythonw.exe")] + sys.argv
+        args = [abspath(sys.executable)] + [abspath(sys.argv[0])] + sys.argv[1:]
         if show_console:
             args[0].replace("pythonw.exe", "python.exe")
         else:
@@ -45,15 +45,7 @@ def create_task():
     创建开机启动 - 任务计划
     """
     os.makedirs(expandvars("%APPDATA%\\WinEnchantKit"), exist_ok=True)
-    if IS_PACKAGE_ENV:
-        startup_file = get_auto_startup_cmd()
-    else:
-        startup_file = expandvars("%APPDATA%\\WinEnchantKit\\startup.bat")
-        with open(startup_file, "w", encoding="gbk") as f:
-            f.write("\n".join([
-                f"cd /D {os.getcwd()}",
-                f"start {get_auto_startup_cmd()}"
-            ]))
+    startup_file = get_auto_startup_cmd()
 
     cmd = cmd_temp.format(startup_file)
     task_add_bat = expandvars("%TEMP%\\WinEnchantKit_task_add.bat")
