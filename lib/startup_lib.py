@@ -27,7 +27,7 @@ def get_auto_startup_cmd() -> str:
         parent_dir = os.path.split(os.getcwd())[0]
         args = [os.path.join(parent_dir, "WinEnchantKit.exe"), *sys.argv[1:]]
     else:
-        args = [sys.executable] + sys.argv
+        args = [sys.executable.replace("python.exe", "pythonw.exe")] + sys.argv
     if "-startup" not in args:
         args.append("-startup")
     return " ".join(args)
