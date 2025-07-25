@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from os import makedirs
 from os.path import isdir, isfile, join, abspath
+from queue import Queue
 from threading import Event, Thread
 
 import pylnk3
@@ -69,6 +70,12 @@ class PluginConfig(ModuleConfigPlus):
         )
 
 
+class Action(Enum):
+    START = 0
+    END = 1
+    REFRESH_INFO = 2
+
+
 class Plugin(BasePlugin):
 
     def __init__(self):
@@ -78,6 +85,8 @@ class Plugin(BasePlugin):
         self.config.clear_cache.handler = self.remove_cache
         self.config.load()
 
+        self.action_queue: Queue[Action | MediaPlaybackStatus] = Queue()
+        self.action_thread = Thread(target=self.action_thread_func, daemon=True)
         self.player: MediaPlayer | None = None
         self.smtc: SMTControls | None = None
         self.kugou_session: Session | None = None
@@ -91,6 +100,8 @@ class Plugin(BasePlugin):
         self.source_changed_token = None
         self.button_pressed_token = None
         self.has_reg_event = False
+
+        self.action_thread.start()
 
     @staticmethod
     def install_kugou_lnk():
@@ -144,9 +155,6 @@ class Plugin(BasePlugin):
         dialog.Destroy()
         self.save_cache()
 
-    def restart_plugin(self):
-        pass
-
     def load_cache(self):
         try:
             fp = "cache/kugou_cover_cache.json"
@@ -168,7 +176,20 @@ class Plugin(BasePlugin):
         except OSError:
             logger.warning(f"保存缓存失败")
 
+    def action_thread_func(self):
+        while self.action_queue.empty():
+            action = self.action_queue.get()
+            if action == Action.START:
+                self.start_raw()
+            elif action == Action.END:
+                self.stop_raw()
+            elif action == Action.REFRESH_INFO:
+                self.on_source_update(force_update=True)
+
     def start(self):
+        self.action_queue.put(Action.START)
+
+    def start_raw(self):
         logger.info(f"加载封面缓存")
         self.load_cache()
         logger.info(f"创建SMTC对象")
@@ -185,10 +206,13 @@ class Plugin(BasePlugin):
         self.config.load_values(new_config)
         if self.enable:
             if self.config.allways_playing:
-                self.smtc.playback_status = MediaPlaybackStatus.PLAYING
-            self.on_source_update(force_update=True)
+                self.action_queue.put(MediaPlaybackStatus.PLAYING)
+            self.action_queue.put(Action.REFRESH_INFO)
 
     def stop(self):
+        self.action_queue.put(Action.END)
+
+    def stop_raw(self):
         self.save_cache()
         logger.info(f"移除事件")
         if self.kugou_session:
@@ -372,9 +396,9 @@ if __name__ == "__main__":
     console_handler.setLevel(logging.DEBUG)
     logger.addHandler(console_handler)
     plugin = Plugin()
-    plugin.start()
+    plugin.start_raw()
     input()
-    plugin.stop()
+    plugin.stop_raw()
     input()
-    plugin.start()
+    plugin.start_raw()
     input()
