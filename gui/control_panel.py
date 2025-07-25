@@ -1,12 +1,13 @@
 import json
 import logging
 import multiprocessing
+import os
 import sys
 import winreg
 from dataclasses import dataclass
 from importlib import import_module
 from os import listdir
-from os.path import join, isfile, basename, exists
+from os.path import join, isfile, basename, exists, expandvars
 from queue import Queue
 from subprocess import Popen, PIPE
 from sys import executable
@@ -70,6 +71,7 @@ class WEKConfig(ModuleConfigPlus):
         self.auto_startup_show_console: BoolParam = BoolParam(False, "自动启动时显示控制台")
         self.set_auto_startup: ButtonParam = ButtonParam(desc="设置开机启动")
         self.delete_auto_startup: ButtonParam = ButtonParam(desc="取消开机启动")
+        self.open_log_dir: ButtonParam = ButtonParam(desc="打开日志目录")
 
 
 class ControlPanel(wx.Frame):
@@ -86,6 +88,7 @@ class ControlPanel(wx.Frame):
         self.config = WEKConfig()
         self.config.set_auto_startup.handler = self.add_wek_auto_startup
         self.config.delete_auto_startup.handler = self.remove_wek_auto_startup
+        self.config.open_log_dir.handler = self.open_log_dir
         self.config.load()
         self.read_config(first_load=True)
 
@@ -161,6 +164,10 @@ class ControlPanel(wx.Frame):
 
     def self_config_cbk(self, config):
         self.config.update(config)
+
+    @staticmethod
+    def open_log_dir():
+        os.startfile(expandvars("%APPDATA%/WinEnchantKit/logs"))
 
     @staticmethod
     def add_wek_auto_startup():
