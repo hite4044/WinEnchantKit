@@ -6,7 +6,6 @@ from os.path import expandvars
 import win32con as con
 from win32comext.shell.shell import ShellExecuteEx
 
-from lib import env
 from lib.env import IS_PACKAGE_ENV
 
 cmd_temp = " ".join(
@@ -39,16 +38,19 @@ def create_task():
     创建开机启动 - 任务计划
     """
     os.makedirs(expandvars("%APPDATA%\\WinEnchantKit"), exist_ok=True)
-    startup_bat = expandvars("%APPDATA%\\WinEnchantKit\\startup.bat")
-    with open(startup_bat, "w", encoding="utf-8") as f:
-        f.write("\n".join([
-            f"cd /D {os.getcwd()}",
-            get_auto_startup_cmd()
-        ]))
+    if IS_PACKAGE_ENV:
+        startup_file = get_auto_startup_cmd()
+    else:
+        startup_file = expandvars("%APPDATA%\\WinEnchantKit\\startup.bat")
+        with open(startup_file, "w", encoding="gbk") as f:
+            f.write("\n".join([
+                f"cd /D {os.getcwd()}",
+                get_auto_startup_cmd()
+            ]))
 
-    cmd = cmd_temp.format(startup_bat)
+    cmd = cmd_temp.format(startup_file)
     task_add_bat = expandvars("%TEMP%\\WinEnchantKit_task_add.bat")
-    with open(task_add_bat, "w", encoding="utf-8") as f:
+    with open(task_add_bat, "w", encoding="gbk") as f:
         f.write(cmd)
 
     ShellExecuteEx(lpVerb="runas", lpFile=task_add_bat, nShow=con.SW_HIDE)
@@ -57,10 +59,10 @@ def create_task():
 def remove_task():
     cmd = "schtasks /delete /tn WinEnchantKit_Startup /f"
     task_remove_bat = expandvars("%TEMP%\\WinEnchantKit_task_remove.bat")
-    with open(task_remove_bat, "w", encoding="utf-8") as f:
+    with open(task_remove_bat, "w", encoding="gbk") as f:
         f.write(cmd)
 
-    ShellExecuteEx(lpVerb="runas", lpFile=task_remove_bat, nShow=con.SW_SHOW)
+    ShellExecuteEx(lpVerb="runas", lpFile=task_remove_bat, nShow=con.SW_HIDE)
 
 
 def create_reg():
