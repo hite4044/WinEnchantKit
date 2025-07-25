@@ -37,7 +37,8 @@ class AboutDialog(wx.Frame):
 
         lines: list[tuple[int, str]] = [
             (0, "Version 1.0"),
-            (0, "© 2025 hite4044, All rights reserved.")
+            (0, "协议: MPL-2.0"),
+            (15, "贡献者: hite4044")
         ]
         for font_size, line in lines:
             text = cwx.StaticText(self, label=line)
