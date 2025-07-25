@@ -67,7 +67,7 @@ class WEKConfig(ModuleConfigPlus):
     def __init__(self):
         super().__init__()
         self.font_size: IntParam | int = IntParam(11, "字体大小")
-        self.auto_startup_wait_time: FloatParam | float = FloatParam(5.0, "自动启动等待时间")
+        self.auto_startup_wait_time: FloatParam | float = FloatParam(1.0, "自动启动等待时间")
         self.set_reg_startup: ButtonParam = ButtonParam(desc="设置注册表开机启动")
         self.delete_reg_startup: ButtonParam = ButtonParam(desc="取消注册表开机启动")
         self.set_task_startup: ButtonParam = ButtonParam(desc="设置任务计划开机启动 (更快)")
