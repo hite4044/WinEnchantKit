@@ -1,4 +1,7 @@
 import logging
+from logging import handlers
+from os import makedirs
+from os.path import expandvars
 
 
 class AnsiColorCodes:
@@ -12,8 +15,9 @@ class AnsiColorCodes:
 
 NO_TIME_FMT = "%(module)s.py:%(lineno)d [%(levelname)s]"
 # noinspection SpellCheckingInspection
-TIME_FMT = "[%(asctime)s.%(msecs)03d] %(module)s:%(lineno)d [%(levelname)s]"
+TIME_FMT = "[%(asctime)s] %(module)s:%(lineno)d [%(levelname)s]"
 GLOBAL_LEVEL = logging.DEBUG
+USE_COLOR = True
 
 COLOR_MAP = {
     logging.DEBUG: AnsiColorCodes.ITALIC,
@@ -29,16 +33,28 @@ class ColoredFormatter(logging.Formatter):
 
     def __init__(self):
         super().__init__()
-        self.formatter = logging.Formatter(NO_TIME_FMT)
+        self.formatter = logging.Formatter(NO_TIME_FMT, datefmt="%y-%m-%d %H:%M:%S")
 
     def update_formatter(self, use_time: bool = True):
         if use_time:
             self.formatter = logging.Formatter(TIME_FMT, datefmt="%y-%m-%d %H:%M:%S")
         else:
-            self.formatter = logging.Formatter(NO_TIME_FMT)
+            self.formatter = logging.Formatter(NO_TIME_FMT, datefmt="%y-%m-%d %H:%M:%S")
 
     def format(self, record):
-        return f"{COLOR_MAP.get(record.levelno)}{self.formatter.format(record)} : {record.message}{AnsiColorCodes.RESET}"
+        if USE_COLOR:
+            return f"{COLOR_MAP.get(record.levelno)}{self.formatter.format(record)} : {record.message}{AnsiColorCodes.RESET}"
+        else:
+            return f"{self.formatter.format(record)} : {record.message}"
+
+
+class TimedFormatter(logging.Formatter):
+    def __init__(self):
+        super().__init__()
+        self.formatter = logging.Formatter(TIME_FMT)
+
+    def format(self, record):
+        return f"{self.formatter.format(record)} : {record.message}"
 
 
 class PluginFormatter(ColoredFormatter):
@@ -47,7 +63,10 @@ class PluginFormatter(ColoredFormatter):
         self.name = name
 
     def format(self, record):
-        return f"{COLOR_MAP.get(record.levelno)}{self.formatter.format(record)} : [{self.name}] {record.message}{AnsiColorCodes.RESET}"
+        if USE_COLOR:
+            return f"{COLOR_MAP.get(record.levelno)}{self.formatter.format(record)} : [{self.name}] {record.message}{AnsiColorCodes.RESET}"
+        else:
+            return f"{self.formatter.format(record)} : [{self.name}] {record.message}"
 
 
 def get_plugin_logger(id_: str, name: str):
@@ -57,7 +76,15 @@ def get_plugin_logger(id_: str, name: str):
     plugin_console_handler.setLevel(GLOBAL_LEVEL)
     plugin_console_handler.setFormatter(PluginFormatter(name))
     plugin_logger.addHandler(plugin_console_handler)
+    plugin_logger.addHandler(time_rotating_file_handler)
     return plugin_logger
+
+
+makedirs(expandvars('%APPDATA%/WinEnchantKit/logs'), exist_ok=True)
+time_rotating_file_handler = handlers.TimedRotatingFileHandler(
+    filename=expandvars('%APPDATA%/WinEnchantKit/logs/log.log'), when='D')
+time_rotating_file_handler.setLevel(logging.DEBUG)
+time_rotating_file_handler.setFormatter(TimedFormatter())
 
 
 logger = logging.getLogger("WinEnchantKitLogger")
@@ -66,3 +93,4 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(GLOBAL_LEVEL)
 console_handler.setFormatter(ColoredFormatter())
 logger.addHandler(console_handler)
+logger.addHandler(time_rotating_file_handler)
