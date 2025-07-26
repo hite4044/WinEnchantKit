@@ -36,12 +36,12 @@ class HideInfo:
     cls_name: str
     proc_name: str
     window_cnt: int
-    use_re: str = "F"
+    use_re: bool = False
     style: list[str] | str = ""
-    hide_way: str = str(HideWay.CLOSE)
+    hide_way: int | None = HideWay.CLOSE
     action_dealy: float = 0.0
-    enable_show_check: str = "F"
-    do_last_action: str = "F"
+    enable_show_check: bool = False
+    do_last_action: bool = False
 
 
 def extract_window_style(hwnd: int) -> list[str]:
@@ -75,7 +75,7 @@ class PluginConfig(ModuleConfigPlus):
                 (
                 [],
                 "窗口 (悬浮查看提示)",
-                [str, str, str, str, int, str, str, int, float, str, str],
+                [str, str, str, str, int, bool, str, int, float, bool, bool],
                 [("规则名", 110), ("标题", 150), ("类名", 170), ("进程名", 120), ("次数", 37), ("启用正则", 60),
                  ("窗口样式", 120), ("隐藏方式", 60), ("操作延迟", 60), ("显示检测", 90), ("仅执行最后操作", 60)],
                 ("规则114514", "", "", "", "1", "F", "WS_MINIMIZEBOX|WS_VISIBLE", "", "0.0", "F", "F"),
@@ -126,7 +126,7 @@ class PluginConfig(ModuleConfigPlus):
             "[隐藏方式] 按照HideWay的顺序从0开始 (例: 隐藏窗口->2), 空则使用全局设置",
             "[操作延迟] Neko: 要等一会再进行操作喵?",
             "[启用显示检测] 使本条规则监测窗口的显示而不是创建",
-            "[仅执行最后操作] 仅仅在剩余次数等于0时操作一次"
+            "[仅执行最后操作] 仅在剩余次数等于0时操作一次"
         ])
         self.import_rules: ButtonParam = ButtonParam(desc="导入规则")
         self.export_rules: ButtonParam = ButtonParam(desc="导出规则")
@@ -252,12 +252,12 @@ class Plugin(BasePlugin):
             assert isinstance(info, HideInfo)
             if not (info.title or info.cls_name or info.proc_name):
                 continue
-            if info.enable_show_check == "T" and not in_show_handler:  # 如果设置了T, 而且不是在显示窗口处理过程中就跳过
+            if info.enable_show_check and not in_show_handler:  # 如果设置了T, 而且不是在显示窗口处理过程中就跳过
                 continue
-            elif info.enable_show_check != "T" and in_show_handler:  # 如果设置了F, 而且是在显示窗口处理过程中就跳过
+            elif not info.enable_show_check and in_show_handler:  # 如果设置了F, 而且是在显示窗口处理过程中就跳过
                 continue
 
-            match_func = re.match if info.use_re == "T" else lambda source, current: source in current
+            match_func = re.match if info.use_re else lambda source, current: source in current
             if info.title and not match_func(info.title, title):
                 continue
             if info.cls_name and not match_func(info.cls_name, cls_name):
@@ -280,7 +280,7 @@ class Plugin(BasePlugin):
                 continue
             info.window_cnt -= 1
             debug_func(f"窗口规则剩余使用次数： {info.window_cnt}")
-            if info.do_last_action == "T" and info.window_cnt != 0:
+            if info.do_last_action and info.window_cnt != 0:
                 continue
             hide_way = int(info.hide_way) if info.hide_way else self.config.hide_way
             if info.action_dealy == 0:

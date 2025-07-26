@@ -1,3 +1,5 @@
+import typing
+
 import wx
 
 from base import *
@@ -111,7 +113,10 @@ class EditableTable(wx.Panel):
             else:
                 self.ctrl.InsertItem(i, str(item[0]))
                 for j, content in enumerate(item[1:] + list(self.param.default_line)[len(item):]):
-                    self.ctrl.SetItem(i, j + 1, str(content))
+                    if isinstance(content, bool):
+                        self.ctrl.SetItem(i, j + 1, "T" if content else "F")
+                    else:
+                        self.ctrl.SetItem(i, j + 1, str(content))
 
     def on_menu(self, event: wx.ListEvent | wx.MouseEvent):
         if isinstance(event, wx.MouseEvent):
@@ -150,10 +155,20 @@ class EditableTable(wx.Panel):
             self.ctrl.DeleteItem(active_item)
 
     def get_value(self) -> list[Any] | list[list[Any]]:
-        data = [
-            [self.param.item_types[j](self.ctrl.GetItemText(i, j)) for j in range(self.ctrl.GetColumnCount())]
+        data: list[list[str | int | float | bool | None]] = [
+            [typing.cast(str, self.ctrl.GetItemText(i, j)) for j in range(self.ctrl.GetColumnCount())]
             for i in range(self.ctrl.GetItemCount())
         ]
+        for row in data:
+            for i, item in enumerate(row):
+                item_type = self.param.item_types[i]
+                if item_type in [int, float]:
+                    try:
+                        row[i] = item_type(item)
+                    except ValueError:
+                        row[i] = None
+                elif item_type == bool:
+                    row[i] = item in ["T", "True", "true"]
         if not self.param.headers:
             return [item[0] for item in data]
         return data
