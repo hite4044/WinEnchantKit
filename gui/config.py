@@ -137,7 +137,7 @@ class EditableTable(wx.Panel):
         for i, item in enumerate(data[1:] + list(self.param.default_line)[len(data):]):
             self.ctrl.SetItem(self.ctrl.GetItemCount() - 1, i + 1, str(item))
 
-    def on_add(self, _):
+    def on_add(self):
         self.ctrl.InsertItem(self.ctrl.GetItemCount(), "")
         if self.param.default_line:
             for i, item in enumerate(self.param.default_line):
