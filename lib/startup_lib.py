@@ -32,9 +32,9 @@ def get_auto_startup_cmd(show_console: bool = False) -> str:
     else:
         args = [abspath(sys.executable)] + [abspath(sys.argv[0])] + sys.argv[1:]
         if show_console:
-            args[0].replace("pythonw.exe", "python.exe")
+            args[0] = args[0].replace("pythonw.exe", "python.exe")
         else:
-            args[0].replace("python.exe", "pythonw.exe")
+            args[0] = args[0].replace("python.exe", "pythonw.exe")
     if "-startup" not in args:
         args.append("-startup")
     return " ".join(args)
