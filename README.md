@@ -41,4 +41,9 @@
 
 
 # 画廊
-<img width="512" height="512" alt="image" src="https://github.com/user-attachments/assets/85f56c5f-56af-46a5-8cad-24ac6f7e0da6" />
+
+<img width="1011" height="708" alt="image" src="https://github.com/user-attachments/assets/23739862-a653-49f0-8ba2-a6f474252158" />
+
+Never gonna give you up~
+
+<img width="846" height="689" alt="image" src="https://github.com/user-attachments/assets/d01f5f75-563a-443c-bf5b-b7b43a5e0fac" />
