@@ -1,12 +1,12 @@
 import json
 import logging
 import re
-import pywintypes
 from copy import deepcopy
 from dataclasses import dataclass
 from threading import Thread, Event
 
 import psutil
+import pywintypes
 import win32con as con
 import wx
 # noinspection PyPackageRequirements
@@ -115,6 +115,19 @@ class PluginConfig(ModuleConfigPlus):
                         "F",
                         "T"
                     ],
+                    "L19": [
+                        "L19",
+                        "L19",
+                        "XYClient",
+                        "DeviceDriver.exe",
+                        1,
+                        "T",
+                        "WS_EX_PALETTEWINDOW|WS_EX_TOPMOST",
+                        2,
+                        0.0,
+                        "T",
+                        "F"
+                    ]
                 }
             )
         self.windows.help_string = "\n".join([
