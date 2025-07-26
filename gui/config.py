@@ -179,6 +179,7 @@ class ConfigLine(wx.Panel):
         if use_sizer:
             super().__init__(parent=parent)
             parent = self
+        self.parent = parent
         self.param = param
 
         self.label = CenteredText(parent, label=param.desc, x_center=False)
@@ -215,6 +216,7 @@ class ConfigLine(wx.Panel):
         tooltip = wx.ToolTip(param.help_string)
         tooltip2 = wx.ToolTip(param.help_string)
 
+        self.label.Bind(wx.EVT_LEFT_DOWN, self.pop_help_string_wnd)
         self.label.SetToolTip(tooltip)
         self.input.SetToolTip(tooltip2)
         if use_sizer:
@@ -223,6 +225,19 @@ class ConfigLine(wx.Panel):
             self.sizer.Add(self.input, 1, wx.EXPAND)
             self.sizer.SetMinSize((-1, 25))
             self.SetSizer(self.sizer)
+
+    def pop_help_string_wnd(self, event: wx.MouseEvent):
+        event.Skip()
+        if not self.param.help_string:
+            return
+        wnd = wx.Frame(self.parent, title="参数提示")
+        wnd.SetFont(self.parent.GetFont())
+        wnd.SetBackgroundColour(self.parent.GetBackgroundColour())
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(wx.StaticText(wnd, label=self.param.help_string))
+        wnd.SetSizer(sizer)
+        wnd.Fit()
+        wnd.Show()
 
     def get_value(self) -> Any:
         if self.param.kind in [ParamKind.BOOL, ParamKind.STRING]:

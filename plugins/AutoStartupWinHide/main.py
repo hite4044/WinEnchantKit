@@ -74,7 +74,7 @@ class PluginConfig(ModuleConfigPlus):
         self.windows: TableParam | list[HideInfo] = TableParam \
                 (
                 [],
-                "窗口 (悬浮查看提示)",
+                "窗口 (悬浮/点击 查看提示)",
                 [str, str, str, str, int, bool, str, int, float, bool, bool],
                 [("规则名", 110), ("标题", 150), ("类名", 170), ("进程名", 120), ("次数", 37), ("启用正则", 60),
                  ("窗口样式", 120), ("隐藏方式", 60), ("操作延迟", 60), ("显示检测", 90), ("仅执行最后操作", 60)],
