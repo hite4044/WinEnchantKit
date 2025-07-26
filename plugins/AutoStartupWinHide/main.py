@@ -88,13 +88,13 @@ class PluginConfig(ModuleConfigPlus):
                         1,
                         "F",
                         "WS_MINIMIZEBOX|WS_VISIBLE",
-                        HideWay.CLOSE
+                        HideWay.HIDE
                     ],
                     "腾讯元宝": [
                         "腾讯元宝",
                         "腾讯元宝",
                         "Tauri Window",
-                        "yuanbao.exe",
+                        "Yuanbao.exe",
                         1,
                         "F",
                         "WS_BORDER|WS_EX_APPWINDOW",
@@ -121,7 +121,7 @@ class PluginConfig(ModuleConfigPlus):
                         "XYClient",
                         "DeviceDriver.exe",
                         1,
-                        "T",
+                        "F",
                         "WS_EX_PALETTEWINDOW|WS_EX_TOPMOST",
                         2,
                         0.0,
@@ -275,7 +275,7 @@ class Plugin(BasePlugin):
                 continue
             if info.cls_name and not match_func(info.cls_name, cls_name):
                 continue
-            if info.proc_name and not match_func(info.proc_name, proc_name):
+            if info.proc_name and not match_func(info.proc_name, proc_name) and proc_name.lower() not in info.proc_name.lower():
                 continue
 
             window_styles = extract_window_style(hwnd)
