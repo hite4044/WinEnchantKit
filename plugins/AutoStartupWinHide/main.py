@@ -242,12 +242,12 @@ class Plugin(BasePlugin):
         except pywintypes.error:
             return
 
-        info_func = logger.info if self.config.debug_output else lambda _: None
         debug_func = logger.debug if self.config.debug_output else lambda _: None
 
         if not is_static_check or self.config.debug_exist_output:
             self.window_cnt += 1
-            info_func(f"窗口{'显示' if in_show_handler else '创建'}: {hwnd} -> {title}|{cls_name}|{proc_name}")
+            key_word = "静态检测" if is_static_check else ('窗口显示' if in_show_handler else '窗口创建')
+            debug_func(f"{key_word}: {hwnd} -> {title}|{cls_name}|{proc_name}")
         for info in self.config.windows:
             assert isinstance(info, HideInfo)
             if not (info.title or info.cls_name or info.proc_name):
@@ -282,11 +282,11 @@ class Plugin(BasePlugin):
             debug_func(f"窗口规则剩余使用次数： {info.window_cnt}")
             if info.do_last_action == "T" and info.window_cnt != 0:
                 continue
-            debug_func(f"执行窗口修改 [{hwnd}], 延时: {info.action_dealy}s")
             hide_way = int(info.hide_way) if info.hide_way else self.config.hide_way
             if info.action_dealy == 0:
                 self.do_action_window(hwnd, hide_way)
             else:
+                debug_func(f"执行窗口修改 [{hwnd}], 延时{info.action_dealy}s")
                 wx.CallAfter(wx.CallLater, int(info.action_dealy * 1000), self.do_action_window, hwnd, hide_way)
         return
 
