@@ -2,7 +2,7 @@
   "id": "auto_startup_app_hide",
   "name": "自启应用隐藏",
   "author": "hite404",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "main_file": "main.py",
   "main_class": "Plugin",
   "desc": "最小化开机自启的软件窗口",
