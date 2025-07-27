@@ -36,7 +36,7 @@ class AboutDialog(wx.Frame):
         self.sizer.Add(text_sizer, 1, wx.EXPAND)
 
         lines: list[tuple[int, str]] = [
-            (0, "Version 1.1.1"),
+            (0, "Version 1.2"),
             (0, "协议: MPL-2.0"),
             (15, "贡献者: hite4044")
         ]
