@@ -85,7 +85,7 @@ class PluginConfig(ModuleConfigPlus):
                         "",
                         "Chrome_WidgetWin_1",
                         "哔哩哔哩.exe",
-                        1,
+                        2,
                         "F",
                         "WS_MINIMIZEBOX|WS_VISIBLE",
                         HideWay.HIDE
