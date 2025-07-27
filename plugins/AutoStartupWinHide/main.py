@@ -295,7 +295,8 @@ class Plugin(BasePlugin):
             debug_func(f"窗口规则剩余使用次数： {info.window_cnt}")
             if info.do_last_action and info.window_cnt != 0:
                 continue
-            hide_way = int(info.hide_way) if info.hide_way else self.config.hide_way
+            hide_way = int(info.hide_way) if info.hide_way is not None else self.config.hide_way
+            debug_func(f"执行隐藏: {info}")
             if info.action_dealy == 0:
                 self.do_action_window(hwnd, hide_way)
             else:
@@ -309,7 +310,7 @@ class Plugin(BasePlugin):
         cls_name = win32gui.GetClassName(hwnd)
         proc_pid = GetWindowThreadProcessId(hwnd)[1]
         proc_name = psutil.Process(proc_pid).name()
-        logger.info(f"执行窗口修改 {hwnd} -> {title}|{cls_name}|{proc_name}")
+        logger.info(f"执行窗口修改 {hwnd} ({hide_way}) -> {title}|{cls_name}|{proc_name}")
         if hide_way == HideWay.CLOSE:
             win32gui.PostMessage(hwnd, con.WM_CLOSE)
         elif hide_way == HideWay.MINIMIZE:
