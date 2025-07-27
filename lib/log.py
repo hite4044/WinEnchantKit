@@ -1,4 +1,6 @@
+import io
 import logging
+import sys
 from datetime import datetime
 from os import makedirs
 from os.path import expandvars
@@ -18,6 +20,7 @@ NO_TIME_FMT = "%(module)s.py:%(lineno)d [%(levelname)s]"
 TIME_FMT = "[%(asctime)s] %(module)s:%(lineno)d [%(levelname)s]"
 GLOBAL_LEVEL = logging.DEBUG
 USE_COLOR = True
+#logging.basicConfig(encoding="utf-8")
 
 COLOR_MAP = {
     logging.DEBUG: AnsiColorCodes.ITALIC,
@@ -72,7 +75,7 @@ class PluginFormatter(ColoredFormatter):
 def get_plugin_logger(id_: str, name: str):
     plugin_logger = logging.getLogger(f"WinEnchantKitLogger_{id_}")
     plugin_logger.setLevel(GLOBAL_LEVEL)
-    plugin_console_handler = logging.StreamHandler()
+    plugin_console_handler = logging.StreamHandler(io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8'))
     plugin_console_handler.setLevel(GLOBAL_LEVEL)
     plugin_console_handler.setFormatter(PluginFormatter(name))
     plugin_logger.addHandler(plugin_console_handler)
@@ -89,7 +92,7 @@ time_rotating_file_handler.setFormatter(TimedFormatter())
 
 logger = logging.getLogger("WinEnchantKitLogger")
 logger.setLevel(GLOBAL_LEVEL)
-console_handler = logging.StreamHandler()
+console_handler = logging.StreamHandler(io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8'))
 console_handler.setLevel(GLOBAL_LEVEL)
 console_handler.setFormatter(ColoredFormatter())
 logger.addHandler(console_handler)
