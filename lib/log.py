@@ -1,5 +1,5 @@
 import logging
-from logging import handlers
+from datetime import datetime
 from os import makedirs
 from os.path import expandvars
 
@@ -81,8 +81,8 @@ def get_plugin_logger(id_: str, name: str):
 
 
 makedirs(expandvars('%APPDATA%/WinEnchantKit/logs'), exist_ok=True)
-time_rotating_file_handler = handlers.TimedRotatingFileHandler(
-    filename=expandvars('%APPDATA%/WinEnchantKit/logs/log.log'), when='D')
+time_rotating_file_handler = logging.FileHandler(
+    filename=expandvars(f"%APPDATA%/WinEnchantKit/logs/log_{datetime.now().strftime('%Y-%m-%d')}.log"))
 time_rotating_file_handler.setLevel(logging.DEBUG)
 time_rotating_file_handler.setFormatter(TimedFormatter())
 

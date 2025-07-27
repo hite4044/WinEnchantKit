@@ -25,6 +25,9 @@ if sys.orig_argv[0].endswith("pythonw.exe"):  # 当使用pythonw.exe启动时
     log.NO_TIME_FMT = log.TIME_FMT
     t = typing.cast(log.ColoredFormatter, log.console_handler.formatter)
     t.update_formatter(use_time=True)
+    log.logger.info("")
+    log.logger.info("")
+    log.logger.info(f"WinEnchantKit 启动... ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
 
 import wx
 
