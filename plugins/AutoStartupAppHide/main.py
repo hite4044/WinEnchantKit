@@ -238,11 +238,13 @@ class Plugin(BasePlugin):
         self.parse_create_window(hwnd, in_show_handler=True)
 
     def update_config(self, old_config: dict[str, Any], new_config: dict[str, Any]):
-        super().update_config(old_config, new_config)
         if self.enable:
-            self.config.saved_windows = None
             self.stop()
+            super().update_config(old_config, new_config)
+            self.config.saved_windows = None
             self.start()
+        else:
+            super().update_config(old_config, new_config)
 
     def parse_create_window(self, hwnd: int, is_static_check: bool = False, in_show_handler: bool = False):
         try:
