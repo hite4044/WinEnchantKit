@@ -36,7 +36,7 @@ class AboutDialog(wx.Frame):
         self.sizer.Add(text_sizer, 1, wx.EXPAND)
 
         lines: list[tuple[int, str]] = [
-            (0, "Version 1.2"),
+            (0, "Version 1.3"),
             (0, "协议: MPL-2.0"),
             (15, "贡献者: hite4044")
         ]
@@ -71,8 +71,7 @@ class AboutDialog(wx.Frame):
 
     @staticmethod
     def open_project_bilibili_video(_):
-        wx.MessageBox("还没有做好呢qwq", "提示", style=wx.OK | wx.ICON_INFORMATION)
-        # webbrowser.open("")
+        webbrowser.open("https://www.bilibili.com/video/BV19B8EzPEA9/")
 
     def on_text(self, _):
         if self.tc.text == "pwd":
