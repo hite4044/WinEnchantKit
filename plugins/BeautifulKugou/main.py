@@ -12,7 +12,7 @@ from win32gui import SetWindowLong, GetWindowLong, GetClassName
 
 from base import *
 from dwm import *
-from kugou_finder import get_main_kugou_window, add_style
+from kugou_finder import get_main_kugou_window, add_style, ProcType
 
 name = "酷狗美化"
 logger = logging.getLogger("WinEnchantKitLogger_beautiful_kugou")
@@ -83,6 +83,11 @@ class Plugin(BasePlugin):
     config = ModuleConfig(
         {
             "tip": TipParam("有些效果开启又关闭后需重启才能恢复"),
+            "proc_type": ChoiceParamPlus(ProcType.KUGOU,
+                                         {
+                                             ProcType.KUGOU: "酷狗音乐",
+                                             ProcType.QQ_MUSIC: "QQ音乐",
+                                         }, "窗口类型"),
             "inv_non_launched": FloatParam(2.0, "检查窗口的间隔时间"),
             "inv_launched": FloatParam(10.0, "酷狗启动后的检查间隔时间"),
 
@@ -211,7 +216,7 @@ class Plugin(BasePlugin):
                     logger.info(f"窗口已关闭")
                     kugou_launched = False
 
-            kugou_hwnd = get_main_kugou_window()
+            kugou_hwnd = get_main_kugou_window(self.config["proc_type"])
             if kugou_hwnd is None:
                 kugou_launched = False
                 continue

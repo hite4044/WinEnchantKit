@@ -1,6 +1,6 @@
 import win32con
 from win32api import GetWindowLong
-from win32gui import GetClassName, EnumWindows, GetWindowText, FindWindow
+from win32gui import GetClassName, EnumWindows, FindWindow
 
 style_map: dict[int, str] = {
     getattr(win32con, name): name
@@ -10,9 +10,20 @@ style_map: dict[int, str] = {
 rev_style_map: dict[str, int] = {v: k for k, v in style_map.items()}
 
 
-def get_kugou_windows() -> list[int] | None:
+class ProcType(int):
+    KUGOU = 0
+    QQ_MUSIC = 1
+
+
+CLS_NAME_MAP = {
+    ProcType.KUGOU: ("kugou_ui", "WS_DLGFRAME"),
+    ProcType.QQ_MUSIC: ("TXGuiFoundation", "WS_DLGFRAME")
+}
+
+
+def get_kugou_windows(cls_name: str) -> list[int] | None:
     def callback(hwnd: int, extras: list):
-        if GetClassName(hwnd) == "kugou_ui":
+        if GetClassName(hwnd) == cls_name:
             extras.append(hwnd)
         return True
 
@@ -40,20 +51,20 @@ def add_style(raw_style: int, new_style: int) -> int:
     return new_style
 
 
-def filter_hwnd(hwnds: list[int]) -> int | None:
-    for hwnd in hwnds:
-        title = GetWindowText(hwnd)
-        if all((c in title) for c in "酷狗音乐"):
-            style_strings = get_window_style_strings(GetWindowLong(hwnd, win32con.GWL_STYLE))
-            if "WS_MINIMIZEBOX" in style_strings:
-                return hwnd
+def filter_hwnd(windows: list[int], style_name: str) -> int | None:
+    for hwnd in windows:
+        style_strings = get_window_style_strings(GetWindowLong(hwnd, win32con.GWL_STYLE))
+        if style_name in style_strings:
+            return hwnd
     return None
 
-def get_main_kugou_window() -> int | None:
-    hwnd = FindWindow("kugou_ui", None)
+
+def get_main_kugou_window(proc_type: int) -> int | None:
+    cls_name, style_name = CLS_NAME_MAP[proc_type]
+    hwnd = FindWindow(cls_name, None)
     if not hwnd:
         return None
-    hwnds = get_kugou_windows()
-    if hwnds is None:
+    windows = get_kugou_windows(cls_name)
+    if windows is None:
         return None
-    return filter_hwnd(hwnds)
+    return filter_hwnd(windows, style_name)
