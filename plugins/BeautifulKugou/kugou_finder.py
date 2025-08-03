@@ -16,7 +16,7 @@ class ProcType(int):
 
 
 CLS_NAME_MAP = {
-    ProcType.KUGOU: ("kugou_ui", "WS_DLGFRAME"),
+    ProcType.KUGOU: ("kugou_ui", "WS_THICKFRAME"),
     ProcType.QQ_MUSIC: ("TXGuiFoundation", "WS_DLGFRAME")
 }
 
