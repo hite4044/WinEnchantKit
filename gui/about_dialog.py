@@ -47,7 +47,7 @@ class AboutDialog(wx.Frame):
             self.sizer.Add(text, 0, wx.ALIGN_CENTER_HORIZONTAL)
 
         btn = cwx.Button(self, label="查看BiliBili宣传视频")
-        btn.Bind(wx.EVT_BUTTON, self.open_project_bilibili_video)
+        btn.Bind(cwx.EVT_BUTTON, self.open_project_bilibili_video)
         self.sizer.Add(btn)
         self.sizer.AddSpacer(5)
 
