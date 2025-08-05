@@ -262,12 +262,21 @@ class ConfigLine(wx.Panel):
             return self.param.parse_value(self.input.GetValue())
 
 
+def get_line_height(parent: wx.Window):
+    entry = wx.TextCtrl(parent)
+    entry.Show()
+    height = entry.GetSize()[1]
+    entry.Destroy()
+    return height
+
+
 class ConfigEditor(wx.Dialog):
     def __init__(self, parent: wx.Frame, name: str, config: ModuleConfig, cbk: Callable[[dict[str, Any]], None]):
         super().__init__(parent=parent, size=(400, 200), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self.callback = cbk
         self.SetTitle(f"插件配置 - {name}")
         self.SetFont(parent.GetFont())
+        CFG_LINE_HEIGHT = get_line_height(self)
         self.sizer = wx.BoxSizer(wx.VERTICAL)
         for name, param in config.params.items():
             if param.kind == ParamKind.TIP:
@@ -282,7 +291,7 @@ class ConfigEditor(wx.Dialog):
                 continue
             line = ConfigLine(self, param, config[name], use_sizer=False)
             if param.kind != ParamKind.LIST:
-                line.input.SetMinSize((-1, 28))
+                line.input.SetMinSize((-1, CFG_LINE_HEIGHT))
             self.cfg_sizer.Add(line.label, 0, wx.EXPAND)
             self.cfg_sizer.Add(line.input, 1, wx.EXPAND)
             if isinstance(line.input, EditableTable):
