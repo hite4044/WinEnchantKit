@@ -193,6 +193,7 @@ class ControlPanel(wx.Frame):
             end = self.SUCCESS_ENDS[random.randint(0, len(self.SUCCESS_ENDS) - 1)]
             wx.MessageBox(f"{success_msg}", f"成功！- {end}", wx.OK | wx.ICON_INFORMATION)
         except Exception as e:
+            logger.info(f"{e.__class__.__name__}: {e} -> {failed_msg}")
             end = self.FAILED_ENDS[random.randint(0, len(self.FAILED_ENDS) - 1)]
             wx.MessageBox(f"{e.__class__.__name__}: {e}\n{failed_msg}",
                           f"失败啦~ - {end}",

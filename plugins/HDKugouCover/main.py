@@ -7,13 +7,15 @@ import winreg
 from dataclasses import dataclass
 from io import BytesIO
 from os import makedirs
-from os.path import isdir, isfile, join, abspath
+from os.path import isdir, isfile, join, abspath, expandvars
 from queue import Queue
 from threading import Event, Thread
 
 import pylnk3
+import win32con as con
 from PIL import Image
 from PIL.PngImagePlugin import PngImageFile
+from win32comext.shell.shell import ShellExecuteEx
 from winsdk.windows.foundation import Uri
 from winsdk.windows.media import SystemMediaTransportControls as SMTControls, \
     MediaPlaybackType, \
@@ -106,7 +108,10 @@ class Plugin(BasePlugin):
     @staticmethod
     def install_kugou_lnk():
         program = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
-        file_path = join(program, "Kugou.lnk")
+        temp_dir = expandvars("%TEMP%\WinEnchantKit")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = join(temp_dir, r"Kugou.lnk")
+        target_path = join(program, "Kugou.lnk")
         if "pythonw.exe" in sys.orig_argv[0]:
             exec_name = "pythonw.exe"
         else:
@@ -117,24 +122,36 @@ class Plugin(BasePlugin):
 
         lnk = pylnk3.for_file(base_executable_path, icon_file=kugou_path, icon_index=0)
         try:
-            lnk.save(file_path)
+            lnk.save(target_path)
             wx.MessageBox("创建快捷方式成功！\n记得重启程序哦", "成功！ - ( •̀ ω •́ )✧", wx.OK | wx.ICON_INFORMATION)
             return
         except OSError:
             pass
-        ret = wx.MessageBox("权限不足, 是否保存至其他地方并自行移动至目标文件夹?",
-                            "搞砸啦！ - ㄟ( ▔, ▔ )ㄏ", wx.YES_NO | wx.ICON_WARNING)
+        lnk.save(temp_path)
+        lnk_install_bat = expandvars(r"%TEMP%\WinEnchantKit-Plugin-HDKugouCover-Kugou-Lnk-Install.bat")
+        with open(lnk_install_bat, "w+") as f:
+            f.write("\n".join([
+                f'move "{temp_path}" "{target_path}"'
+            ]))
+        try:
+            ShellExecuteEx(lpVerb="runas", lpFile=lnk_install_bat, nShow=con.SW_HIDE)
+            wx.MessageBox("创建快捷方式成功！\n记得重启程序哦", "成功！ - ( •̀ ω •́ )✧", wx.OK | wx.ICON_INFORMATION)
+            return
+        except Exception as e:
+            logger.error(f"{e.__class__.__name__}: {e} -> 运行快捷方式复制脚本失败")
+            ret = wx.MessageBox(f"{e.__class__.__name__}: {e}\n"
+                                "运行快捷方式复制脚本失败\n"
+                                "要打开 lnk所在目录 和 目标文件夹 吗?",
+                                f"失败啦~ - ＞︿＜",
+                                wx.YES_NO | wx.ICON_ERROR)
         if ret == wx.YES:
-            file_path = wx.FileSelector("请选择保存位置", "保存", "Kugou.lnk",
-                                        ".lnk", "*.lnk", wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
-            if file_path:
-                lnk.save(file_path)
-                os.startfile("C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs")
-                Thread(target=os.system, args=[f"explorer /select,{file_path}"], daemon=True).start()
-                wx.MessageBox("请移动lnk至 [C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs]\n"
-                              "创建快捷方式成功！(虽说是保存到别处\n"
-                              "记得重启程序哦",
-                              "成功！ - (*^▽^*)", wx.OK | wx.ICON_INFORMATION)
+            os.startfile(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs")
+            Thread(target=os.system, args=[f"explorer /select,{temp_path}"], daemon=True).start()
+            wx.MessageBox("已打开两个文件夹！\n"
+                          "请移动lnk至 [C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs]\n"
+                          "创建快捷方式成功！(虽说是保存到别处\n"
+                          "记得重启程序哦",
+                          "成功！ - (*^▽^*)", wx.OK | wx.ICON_INFORMATION)
 
     def remove_cache(self):
         self.cover_cache.clear()
