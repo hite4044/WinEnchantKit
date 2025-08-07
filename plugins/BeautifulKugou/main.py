@@ -83,6 +83,7 @@ class Plugin(BasePlugin):
     config = ModuleConfig(
         {
             "tip": TipParam("有些效果开启又关闭后需重启才能恢复"),
+            "tip2": TipParam("QQ音乐想要起效要先设置 窗口类型 为 QQ音乐"),
             "proc_type": ChoiceParamPlus(ProcType.KUGOU,
                                          {
                                              ProcType.KUGOU: "酷狗音乐",

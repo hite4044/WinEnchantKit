@@ -47,6 +47,8 @@ class CoverCacheFmt(int):
 class PluginConfig(ModuleConfigPlus):
     def __init__(self):
         super().__init__()
+        self.tip: TipParam = TipParam("插件启用后如果仍然不显示高清封面, 请在快速设置面板(开WIFI的地方)")
+        self.tip2: TipParam = TipParam("箭头按钮切换SMTC会话, 直到找到那个专辑名前多了一个空格的SMTC会话")
         self.cover_size: ChoiceParam | str = ChoiceParam("480",
                                                          ["480", "400", "240", "150", "120", "100", "64"],
                                                          "封面尺寸")
