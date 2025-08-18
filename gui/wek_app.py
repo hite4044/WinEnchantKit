@@ -14,5 +14,5 @@ class WinEnchantKitApp(wx.App):
         return True
 
     def OnQueryEndSession(self, event):
-        self.control_panel.save_config()  # 保存配置
+        self.control_panel.Destroy()
         event.Skip()  # 允许关闭
