@@ -1,11 +1,9 @@
 import faulthandler
-import io
 import os
 import sys
 import typing
 from datetime import datetime
 from os.path import expandvars
-from time import sleep
 
 faulthandler.is_enabled()
 
@@ -31,12 +29,9 @@ if sys.orig_argv[0].endswith("pythonw.exe"):  # 当使用pythonw.exe启动时
     log.logger.info("")
     log.logger.info(f"WinEnchantKit 启动... ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
 
-import wx
 
-from gui.control_panel import ControlPanel
+from gui.wek_app import WinEnchantKitApp
 
 if __name__ == "__main__":
-    app = wx.App()
-    show_window = not (len(sys.argv) > 1 and "-startup" in sys.argv)
-    frame = ControlPanel(None, show_window)
+    app = WinEnchantKitApp()
     app.MainLoop()
