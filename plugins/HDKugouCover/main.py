@@ -13,7 +13,7 @@ from threading import Event, Thread
 
 import pylnk3
 import win32con as con
-from PIL import Image
+from PIL import Image, ImageCms
 from PIL.PngImagePlugin import PngImageFile
 from win32comext.shell.shell import ShellExecuteEx
 from winsdk.windows.foundation import Uri
@@ -313,16 +313,17 @@ class Plugin(BasePlugin):
                                         headers=HEADERS, data=None)
                     content = resp.content
                     image = Image.open(BytesIO(content))
+                    icc_profile = ImageCms.getOpenProfile('plugins/HDKugouCover/sRGB_v4_ICC_preference.icc')
                     if self.config.cover_cache_format == CoverCacheFmt.JPG:
-                        image = image.convert("CMYK")
-                        image.save(cover_cache_fp + ".jpg", "JPEG", quality=self.config.cover_cache_quality)
+                        image.save(cover_cache_fp + ".jpg", "JPEG", quality=self.config.cover_cache_quality,
+                                   icc_profile=icc_profile.tobytes())
                     elif self.config.cover_cache_format == CoverCacheFmt.PNG:
                         image = image.convert("RGBA")
                         image.save(cover_cache_fp + ".png", "PNG")
                     else:
                         fmt = "PNG" if isinstance(image, PngImageFile) else "JPEG"
                         if fmt == "JPEG":
-                            image.save(cover_cache_fp + ".jpg", "JPEG")
+                            image.save(cover_cache_fp + ".jpg", "JPEG", icc_profile=icc_profile.tobytes())
                         else:
                             image = image.convert("RGBA")
                             image.save(cover_cache_fp + ".png", "PNG")
