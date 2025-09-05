@@ -58,6 +58,8 @@ def search_for_song_list(title: str, artist: str) -> list[dict[str, Any]]:
             logger.error("系统代理有问题 (是工具的问题")
             has_alert = True
         raise RuntimeError("SSL错误")
+    except requests.exceptions.ConnectionError:
+        return []
     if resp.status_code != 200:
         raise RuntimeError(f"搜索失败: 服务器返回HTTP错误码 [{resp.status_code}]")
     has_alert = False
