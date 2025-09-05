@@ -10,6 +10,7 @@ from os import makedirs
 from os.path import isdir, isfile, join, abspath, expandvars
 from queue import Queue
 from threading import Event, Thread
+from time import perf_counter, time
 
 import pylnk3
 import win32con as con
@@ -27,6 +28,7 @@ from winsdk.windows.storage.streams import RandomAccessStreamReference
 
 from backend import *
 from base import *
+from plugins.HDKugouCover.music_reporter import MusicReporter
 
 name = "高清酷狗封面"
 
@@ -65,8 +67,10 @@ class PluginConfig(ModuleConfigPlus):
                                                                                     CoverCacheFmt.PNG: "PNG",
                                                                                     CoverCacheFmt.RAW_FORMAT: "原格式"
                                                                                     }, "封面缓存格式")
-        self.refresh_info: ButtonParam | None = ButtonParam(desc="立即更新信息")
-        self.clear_cache: ButtonParam | None = ButtonParam(desc="清除封面url缓存")
+        self.refresh_info: ButtonParam = ButtonParam(desc="立即更新信息")
+        self.clear_cache: ButtonParam = ButtonParam(desc="清除封面url缓存")
+        self.enable_music_report: BoolParam | bool = BoolParam(False, "启用音乐报告")
+        self.create_music_report: ButtonParam = ButtonParam(desc="生成音乐报告")
         self.install_kugou_lnk: ButtonParam = ButtonParam(
             desc="安装图标快捷方式 (需要管理员)",
             help_string="使得在SMTC页面出现 [🅺 Kugou] 而不是 [未知应用]\n"
@@ -87,6 +91,7 @@ class Plugin(BasePlugin):
         self.config.refresh_info.handler = lambda: self.on_source_update(force_update=True)
         self.config.install_kugou_lnk.handler = self.install_kugou_lnk
         self.config.clear_cache.handler = self.remove_cache
+        self.config.create_music_report.handler = self.create_report
         self.config.load()
 
         self.action_queue: Queue[Action | MediaPlaybackStatus] = Queue()
@@ -105,7 +110,15 @@ class Plugin(BasePlugin):
         self.button_pressed_token = None
         self.has_reg_event = False
 
+        self.music_reporter = MusicReporter()
+        self.last_reporter_call = 0
+        self.last_reporter_status = [-1, -1]
+
         self.action_thread.start()
+
+    def create_report(self):
+        path = self.music_reporter.output_report()
+        os.system(path)
 
     @staticmethod
     def install_kugou_lnk():
@@ -219,16 +232,23 @@ class Plugin(BasePlugin):
         self.button_pressed_token = self.smtc.add_button_pressed(self.on_button_press)
         if not self.has_reg_event:
             self.sessions_changed_token = self.sessions.add_sessions_changed(self.on_session_changed)
-        self.on_session_changed()
+        # self.on_session_changed()
 
-    def update_config(self, _, new_config: dict[str, Any]):
+    def update_config(self, old_config: dict[str, Any], new_config: dict[str, Any]):
         self.config.load_values(new_config)
         if self.enable:
             if self.config.allways_playing:
                 self.action_queue.put(MediaPlaybackStatus.PLAYING)
             self.action_queue.put(Action.REFRESH_INFO)
 
+            if old_config["enable_music_report"] != new_config[
+                "enable_music_report"] and not self.config.enable_music_report:
+                self.music_reporter.finish()
+
     def stop(self):
+        self.music_reporter.finish()
+        self.music_reporter.save()
+
         self.action_queue.put(Action.END)
 
     def stop_raw(self):
@@ -288,8 +308,25 @@ class Plugin(BasePlugin):
         if status != self.smtc.playback_status and not self.config.allways_playing:
             self.smtc.playback_status = status
 
+        if self.config.enable_music_report:
+            if MediaPlaybackStatus.CHANGING in self.last_reporter_status and status == MediaPlaybackStatus.PLAYING:
+                if self.music_reporter.current_point:
+                    if time() - self.music_reporter.current_point.time_start > 1.0:
+                        self.music_reporter.count_song(info.title, info.artist, info.album_title, info.album_artist)
+            if perf_counter() - self.last_reporter_call > 0.5:
+                if status == MediaPlaybackStatus.PAUSED:
+                    self.music_reporter.music_pause()
+                elif status == MediaPlaybackStatus.PLAYING:
+                    self.music_reporter.music_resume()
+        self.last_reporter_call = perf_counter()
+        self.last_reporter_status.append(status)
+        self.last_reporter_status.pop(0)
+
         if song_id == self.last_song and not force_update:
+            # logger.debug(f"歌曲信息更新, 歌名相同, 不更新, {str([status])[1:-1]}, {song_id}")
             return
+        if self.config.enable_music_report and not force_update:
+            self.music_reporter.count_song(info.title, info.artist, info.album_title, info.album_artist)
         self.last_song = song_id
         self.update_info(info)
 

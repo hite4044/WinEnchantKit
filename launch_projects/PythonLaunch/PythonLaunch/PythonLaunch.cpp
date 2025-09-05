@@ -50,8 +50,15 @@ int CALLBACK WinMain(
         command += L"\"";
     }
 
+    // 创建管道
+    HANDLE hReadPipe, hWritePipe;
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    CreatePipe(&hReadPipe, &hWritePipe, &sa, 0);
+
     // 准备CreateProcess参数
     STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi;
     std::vector<wchar_t> cmdLine(command.begin(), command.end());
     cmdLine.push_back(L'\0');
@@ -63,7 +70,7 @@ int CALLBACK WinMain(
         NULL,                   // 进程安全属性
         NULL,                   // 线程安全属性
         FALSE,                  // 不继承句柄
-        0,                      // 无特殊标志
+        CREATE_NO_WINDOW,       // 无特殊标志
         NULL,                   // 使用父进程环境
         NULL,                   // 使用父进程工作目录
         &si,
