@@ -76,7 +76,10 @@ class MusicReporter:
             return
         with open(DATA_FILE) as f:
             data = json.load(f)
-            self.music_points = [MusicPoint(**kwargs) for kwargs in data.get("time_points")]
+            self.music_points = []
+            for kwargs in data.get("time_points"):
+                kwargs["music"] = Music(**kwargs["music"])
+                self.music_points.append(MusicPoint(**kwargs))
 
     def save(self):
         data = {
@@ -138,7 +141,7 @@ class MusicReporter:
             f"{music.title} - {music.artist} -> {count}, {string_fmt_time(int(total_time))}" for
             music, (count, total_time) in music_list.items()
         ])
-        with open(r"data\HDKugouCover\音乐报告.txt", "w") as f:
+        with open(r"data\HDKugouCover\音乐报告.txt", "w", encoding="utf-8") as f:
             f.write(content)
 
         return abspath(r"data\HDKugouCover\音乐报告.txt")

@@ -118,7 +118,7 @@ class Plugin(BasePlugin):
 
     def create_report(self):
         path = self.music_reporter.output_report()
-        os.system(path)
+        Thread(target=os.system, args=(path,), daemon=True).start()
 
     @staticmethod
     def install_kugou_lnk():
