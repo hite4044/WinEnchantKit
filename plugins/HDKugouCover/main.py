@@ -309,7 +309,7 @@ class Plugin(BasePlugin):
             self.smtc.playback_status = status
 
         if self.config.enable_music_report:
-            if MediaPlaybackStatus.CHANGING in self.last_reporter_status and status == MediaPlaybackStatus.PLAYING:
+            if MediaPlaybackStatus.STOPPED in self.last_reporter_status and status == MediaPlaybackStatus.PLAYING:
                 if self.music_reporter.current_point:
                     if time() - self.music_reporter.current_point.time_start > 1.0:
                         self.music_reporter.count_song(info.title, info.artist, info.album_title, info.album_artist)
@@ -323,7 +323,7 @@ class Plugin(BasePlugin):
         self.last_reporter_status.pop(0)
 
         if song_id == self.last_song and not force_update:
-            # logger.debug(f"歌曲信息更新, 歌名相同, 不更新, {str([status])[1:-1]}, {song_id}")
+            logger.debug(f"歌曲信息更新, 歌名相同, 不更新, {str([status])[1:-1]}, {song_id}")
             return
         if self.config.enable_music_report and not force_update:
             self.music_reporter.count_song(info.title, info.artist, info.album_title, info.album_artist)
