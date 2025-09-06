@@ -118,13 +118,13 @@ class MusicReporter:
         if not self.current_point:
             return
         # print("暂停")
-        self.pause_counter = perf_counter()
+        self.pause_counter = time()
 
     def music_resume(self):
         if not self.current_point or self.pause_counter == -1:
             return
         # print("继续")
-        self.current_point.time_offset += perf_counter() - self.pause_counter
+        self.current_point.time_offset += time() - self.pause_counter
         self.pause_counter = -1
 
     def output_report(self):
