@@ -323,7 +323,7 @@ class Plugin(BasePlugin):
         self.last_reporter_status.pop(0)
 
         if song_id == self.last_song and not force_update:
-            logger.debug(f"歌曲信息更新, 歌名相同, 不更新, {str([status])[1:-1]}, {song_id}")
+            # logger.debug(f"歌曲信息更新, 歌名相同, 不更新, {str([status])[1:-1]}, {song_id}")
             return
         if self.config.enable_music_report and not force_update:
             self.music_reporter.count_song(info.title, info.artist, info.album_title, info.album_artist)

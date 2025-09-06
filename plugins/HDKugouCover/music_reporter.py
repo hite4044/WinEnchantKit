@@ -110,20 +110,20 @@ class MusicReporter:
                 self.music_points.append(self.current_point)
 
         music = Music(title, artist, album_title, album_artist)
-        print("新歌曲", music)
+        # print("新歌曲", music)
         self.current_point = MusicPoint(music)
         self.current_point.time_start = time()
 
     def music_pause(self):
         if not self.current_point:
             return
-        print("暂停")
+        # print("暂停")
         self.pause_counter = time()
 
     def music_resume(self):
         if not self.current_point or self.pause_counter == -1:
             return
-        print("继续")
+        # print("继续")
         self.current_point.time_offset += time() - self.pause_counter
         self.pause_counter = -1
 
