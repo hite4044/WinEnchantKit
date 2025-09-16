@@ -426,8 +426,15 @@ class ControlPanel(wx.Frame):
         self.auto_launch_cb.SetValue(info.id in self.auto_launch_plugins)
 
     def on_close_window(self, event: wx.CloseEvent):
-        self.show_or_hide()
-        event.Veto()
+        if event.CanVeto():
+            self.show_or_hide()
+            event.Veto()
+            return
+        self.Destroy()
+
+    def Destroy(self):
+        self.save_config()  # 保存配置
+        super().Destroy()  # 再销毁窗口
 
     def on_exit(self):
         if self.has_exited:
