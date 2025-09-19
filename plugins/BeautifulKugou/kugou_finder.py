@@ -7,6 +7,11 @@ style_map: dict[int, str] = {
     for name in dir(win32con)
     if name.startswith("WS_") and (not name.startswith("WS_EX_"))
 }
+ex_style_map: dict[int, str] = {
+    getattr(win32con, name): name
+    for name in dir(win32con)
+    if name.startswith("WS_EX_")
+}
 rev_style_map: dict[str, int] = {v: k for k, v in style_map.items()}
 
 
@@ -41,6 +46,13 @@ def get_window_style_strings(win_style: int) -> list[str]:
             style_strings.append(name)
     return style_strings
 
+
+def get_window_ex_style_strings(win_ex_style: int) -> list[str]:
+    style_strings = []
+    for style, name in ex_style_map.items():
+        if win_ex_style & style:
+            style_strings.append(name)
+    return style_strings
 
 def add_style(raw_style: int, new_style: int) -> int:
     style_strings = get_window_style_strings(raw_style)

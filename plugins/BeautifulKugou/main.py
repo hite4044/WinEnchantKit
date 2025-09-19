@@ -5,6 +5,7 @@ from typing import cast as type_cast
 from xml.etree import ElementTree
 
 import pywintypes
+import win32gui
 import wx
 from PIL import Image
 from win32.lib import win32con
@@ -13,6 +14,7 @@ from win32gui import SetWindowLong, GetWindowLong, GetClassName
 from base import *
 from dwm import *
 from kugou_finder import get_main_kugou_window, add_style, ProcType
+from plugins.BeautifulKugou.kugou_finder import get_window_ex_style_strings
 
 name = "酷狗美化"
 logger = logging.getLogger("WinEnchantKitLogger_beautiful_kugou")
@@ -32,6 +34,36 @@ def right_corner_border_style(hwnd: int, enable_round_corner: bool, corner_type:
             ctypes.byref(ctypes.c_int(corner_type)),
             ctypes.sizeof(ctypes.c_int),
         )
+
+
+def hide_background_window(main_kugou: int):
+    """隐藏酷狗的背景窗口, 如果把酷狗窗口放在白色背景下，会发现边角有一层白色窗口"""
+    windows = []
+
+    def cbk(hwnd: int, _):
+        if not win32gui.GetClassName(hwnd) == "kugou_ui":
+            return
+        if not win32gui.GetWindow(hwnd, win32con.GW_OWNER) == main_kugou:
+            return
+        styles = get_window_ex_style_strings(win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE))
+        if {'WS_EX_LAYERED', 'WS_EX_NOACTIVATE'} != set(styles):
+            return
+        windows.append(hwnd)
+
+    win32gui.EnumWindows(cbk, None)
+    if len(windows) != 2:
+        return
+
+    def calc_size(hwnd: int):
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        return (right - left) * (bottom - top)
+
+    size_value1 = calc_size(windows[0])
+    size_value2 = calc_size(windows[1])
+    if size_value1 > size_value2:
+        win32gui.ShowWindow(windows[0], win32con.SW_MINIMIZE)
+    else:
+        win32gui.ShowWindow(windows[1], win32con.SW_MINIMIZE)
 
 
 def blur_behind(hwnd: int, color: tuple[int, int, int, int],
@@ -245,6 +277,8 @@ class Plugin(BasePlugin):
     def update_window(self, hwnd: int):
         # noinspection PyTypeChecker
         color: tuple[int, int, int, int] = tuple(self.config["accent_color"]) + (self.config["accent_alpha"],)
+        if self.config["proc_type"] == ProcType.KUGOU:
+            hide_background_window(hwnd)
         right_corner_border_style(hwnd, self.config["enable_round_corner"], self.config["corner_type"])
         msg = blur_behind(hwnd, color, self.config)
         if msg is not None:
