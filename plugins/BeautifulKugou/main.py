@@ -61,9 +61,12 @@ def hide_background_window(main_kugou: int):
     size_value1 = calc_size(windows[0])
     size_value2 = calc_size(windows[1])
     if size_value1 > size_value2:
-        win32gui.ShowWindow(windows[0], win32con.SW_MINIMIZE)
+        target = windows[0]
     else:
-        win32gui.ShowWindow(windows[1], win32con.SW_MINIMIZE)
+        target = windows[1]
+    if not win32gui.IsWindowVisible(target):
+        return
+    win32gui.ShowWindow(target, win32con.SW_MINIMIZE)
 
 
 def blur_behind(hwnd: int, color: tuple[int, int, int, int],
