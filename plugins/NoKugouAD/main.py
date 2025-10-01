@@ -1,24 +1,114 @@
 import logging
+from threading import Thread
+
+import win32con as con
+from comtypes import CoInitializeEx, COINIT_MULTITHREADED
+from win32gui import GetClassName
 
 from base import *
+from lib.kugou_finder import is_kugou_main_window, get_main_kugou_window, ProcType
+from lib.window_watcher import WindowWatcher
 
 name = "酷狗无广告"
 logger = logging.getLogger("WinEnchantKitLogger_no_kugou_ad")
 
 
 class Plugin(BasePlugin):
-    config = ModuleConfig({
-        "test": StringParam("test", "test"),
-        "test2": IntParam(1, "test2"),
-        "test3": FloatParam(1.0, "test3"),
-        "test4": BoolParam(True, "test4"),
-    })
+    wnd_watcher: WindowWatcher
+    config = ModuleConfig(
+        {
+            "waiting_for_launch": FloatParam(1.0, "等待酷狗启动时间"),
+            "find_timeout": FloatParam(10.0, "广告加载超时")
+        })
+
+    def __init__(self):
+        self.wnd_watcher = WindowWatcher(con.EVENT_OBJECT_CREATE, self.check_kugou)
+        self.ready_windows = []
+        self.check_thread = Thread(target=self.check_thread_func)
+        self.kugou_hwnd = None
 
     def start(self):
-        logger.info("Starting plugin")
+        kugou = get_main_kugou_window(ProcType.KUGOU)
+        if kugou:
+            self.kugou_hwnd = kugou
+            self.check_thread = Thread(target=self.check_ad_func)
+            self.check_thread.start()
+            return
+
+        self.ready_windows = []
+        self.wnd_watcher.start()
+
+    def check_kugou(self, hwnd: int):
+        if not self.enable or self.ready_windows is None or GetClassName(hwnd) != "kugou_ui":
+            return
+        self.ready_windows.append(hwnd)
+        if not self.check_thread.is_alive():
+            self.check_thread = Thread(target=self.check_thread_func)
+            self.check_thread.start()
+
+    def check_thread_func(self):
+        for hwnd in self.ready_windows:
+            if is_kugou_main_window(hwnd):
+                self.kugou_hwnd = hwnd
+                break
+        else:
+            return
+        self.ready_windows = None
+        self.check_ad_func()
+
+    def check_ad_func(self):
+        import uiautomation
+        CoInitializeEx(COINIT_MULTITHREADED)
+
+        def find_by_index(element: uiautomation.Control, index_list: list[int]):
+            for index in index_list:
+                element = element.GetChildren()[index]
+            return element
+
+        try:
+            uiautomation.SetGlobalSearchTimeout(self.config["waiting_for_launch"])
+            kugou_wnd = uiautomation.WindowControl(Name="酷狗音乐", searchDepth=1)
+            kugou_wnd.Click()
+        except LookupError:
+            return
+        uiautomation.SetGlobalSearchTimeout(self.config["find_timeout"])
+
+        upgrade_vip_ad = next(iter(kugou_wnd.GetChildren()))
+        if upgrade_vip_ad.ControlType == 0xC370 and len(upgrade_vip_ad.GetChildren()) == 1 and len(
+                upgrade_vip_ad.GetChildren()[0].GetChildren()) == 1:
+            upgrade_vip_ad.Hide()
+
+        try:
+            personal_music = kugou_wnd.GroupControl(Name="私人专属好歌")
+            personal_music = personal_music.GetParentControl().GetParentControl().GetParentControl()
+            music_groups = find_by_index(personal_music, [1, 0, 0])
+            recommend_ad = music_groups.GetChildren()[-1]
+            if len(recommend_ad.GetChildren()[0].GetChildren()) == 1:
+                recommend_ad.Hide()
+        except LookupError:
+            pass
+
+        try:
+            live_window = kugou_wnd.TextControl(Name="正在直播", searchDepth=4)
+            live_window = live_window.GetParentControl().GetParentControl().GetParentControl()
+            if live_window.ControlType == 0xC370 and live_window.FrameworkId == "Win32":
+                live_window.Hide()
+        except LookupError:
+            pass
+
 
     def update_config(self, old_config: dict[str, Any], new_config: dict[str, Any]):
         pass
 
     def stop(self):
-        pass
+        if self.wnd_watcher.thread.is_alive():
+            self.wnd_watcher.stop()
+        if self.check_thread.is_alive():
+            self.check_thread.join()
+
+
+if __name__ == "__main__":
+    p = Plugin()
+    p.start()
+    p.check_thread.join()
+    print("FINISH")

@@ -14,7 +14,7 @@ from win32 import win32gui
 from win32process import GetWindowThreadProcessId
 
 from base import *
-from window_watcher import WindowWatcher
+from lib.window_watcher import WindowWatcher
 
 name = "自启应用隐藏"
 logger = logging.getLogger("WinEnchantKitLogger_auto_startup_app_hide")

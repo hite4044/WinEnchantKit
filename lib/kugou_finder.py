@@ -54,6 +54,7 @@ def get_window_ex_style_strings(win_ex_style: int) -> list[str]:
             style_strings.append(name)
     return style_strings
 
+
 def add_style(raw_style: int, new_style: int) -> int:
     style_strings = get_window_style_strings(raw_style)
     style_strings.append(style_map[new_style])
@@ -80,3 +81,11 @@ def get_main_kugou_window(proc_type: int) -> int | None:
     if windows is None:
         return None
     return filter_hwnd(windows, style_name)
+
+
+def is_kugou_main_window(hwnd: int) -> bool:
+    cls_name = GetClassName(hwnd)
+    if cls_name != "kugou_ui":
+        return False
+    style_name = CLS_NAME_MAP[ProcType.KUGOU][1]
+    return style_name in get_window_style_strings(GetWindowLong(hwnd, win32con.GWL_STYLE))

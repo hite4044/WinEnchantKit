@@ -13,8 +13,8 @@ from win32gui import SetWindowLong, GetWindowLong, GetClassName
 
 from base import *
 from dwm import *
-from kugou_finder import get_main_kugou_window, add_style, ProcType
-from plugins.BeautifulKugou.kugou_finder import get_window_ex_style_strings
+from lib.kugou_finder import get_main_kugou_window, add_style, ProcType
+from lib.kugou_finder import get_window_ex_style_strings
 
 name = "酷狗美化"
 logger = logging.getLogger("WinEnchantKitLogger_beautiful_kugou")
