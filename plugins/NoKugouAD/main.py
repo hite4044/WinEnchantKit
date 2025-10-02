@@ -1,8 +1,10 @@
 import logging
 from threading import Thread
+from time import sleep
 
 import win32con as con
 from comtypes import CoInitializeEx, COINIT_MULTITHREADED
+from win32.lib import pywintypes
 from win32gui import GetClassName
 
 from base import *
@@ -17,21 +19,22 @@ class Plugin(BasePlugin):
     wnd_watcher: WindowWatcher
     config = ModuleConfig(
         {
-            "waiting_for_launch": FloatParam(1.0, "等待酷狗启动时间"),
-            "find_timeout": FloatParam(10.0, "广告加载超时")
+            "waiting_for_launch": FloatParam(5.0, "等待酷狗启动时间"),
+            "find_timeout": FloatParam(10.0, "广告加载超时"),
+            "shutdown_check_inv": FloatParam(10.0, "酷狗窗口检查间隔"),
         })
 
     def __init__(self):
         self.wnd_watcher = WindowWatcher(con.EVENT_OBJECT_CREATE, self.check_kugou)
         self.ready_windows = []
-        self.check_thread = Thread(target=self.check_thread_func)
+        self.check_thread = Thread(target=self.check_thread_func, daemon=True)
         self.kugou_hwnd = None
 
     def start(self):
         kugou = get_main_kugou_window(ProcType.KUGOU)
         if kugou:
             self.kugou_hwnd = kugou
-            self.check_thread = Thread(target=self.check_ad_func)
+            self.check_thread = Thread(target=self.check_ad_func, daemon=True)
             self.check_thread.start()
             return
 
@@ -43,7 +46,7 @@ class Plugin(BasePlugin):
             return
         self.ready_windows.append(hwnd)
         if not self.check_thread.is_alive():
-            self.check_thread = Thread(target=self.check_thread_func)
+            self.check_thread = Thread(target=self.check_thread_func, daemon=True)
             self.check_thread.start()
 
     def check_thread_func(self):
@@ -68,7 +71,8 @@ class Plugin(BasePlugin):
         try:
             uiautomation.SetGlobalSearchTimeout(self.config["waiting_for_launch"])
             kugou_wnd = uiautomation.WindowControl(Name="酷狗音乐", searchDepth=1)
-            kugou_wnd.Click()
+            sleep(self.config["waiting_for_launch"] / 2)
+            logger.info("已找到酷狗音乐主窗口")
         except LookupError:
             return
         uiautomation.SetGlobalSearchTimeout(self.config["find_timeout"])
@@ -77,6 +81,7 @@ class Plugin(BasePlugin):
         if upgrade_vip_ad.ControlType == 0xC370 and len(upgrade_vip_ad.GetChildren()) == 1 and len(
                 upgrade_vip_ad.GetChildren()[0].GetChildren()) == 1:
             upgrade_vip_ad.Hide()
+            logger.info("已关闭升级会员广告")
 
         try:
             personal_music = kugou_wnd.GroupControl(Name="私人专属好歌")
@@ -85,6 +90,7 @@ class Plugin(BasePlugin):
             recommend_ad = music_groups.GetChildren()[-1]
             if len(recommend_ad.GetChildren()[0].GetChildren()) == 1:
                 recommend_ad.Hide()
+            logger.info("已关闭私人专属好歌广告")
         except LookupError:
             pass
 
@@ -93,9 +99,23 @@ class Plugin(BasePlugin):
             live_window = live_window.GetParentControl().GetParentControl().GetParentControl()
             if live_window.ControlType == 0xC370 and live_window.FrameworkId == "Win32":
                 live_window.Hide()
+            logger.info("已关闭直播推荐弹窗")
         except LookupError:
             pass
+        uiautomation.Logger.DeleteLog()
 
+        Thread(target=self.kugou_daemon_func, daemon=True).start()
+
+    def kugou_daemon_func(self):
+        while True:
+            sleep(self.config["shutdown_check_inv"])
+            try:
+                GetClassName(self.kugou_hwnd)
+                continue
+            except pywintypes.error:
+                break
+        logger.info("酷狗窗口已关闭, 继续开始监测")
+        self.start()
 
     def update_config(self, old_config: dict[str, Any], new_config: dict[str, Any]):
         pass
