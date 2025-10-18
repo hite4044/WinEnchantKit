@@ -5,7 +5,7 @@
   "version": "1.1.0",
   "main_file": "main.py",
   "main_class": "Plugin",
-  "desc": "检测元素并隐藏酷狗的广告",
+  "desc": "检测元素并隐藏酷狗的广告-待完善",
   "requirements": {
     "pywin32": "",
     "uiautomation": ""
