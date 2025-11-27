@@ -120,7 +120,8 @@ def get_kugou_session() -> Session:
     session_manager: SessionManager = wait_result(SessionManager.request_async())
 
     for session in session_manager.get_sessions():
-        if session.source_app_user_model_id.lower() in ["kugou", "Kugou.exe"]:
+        name = session.source_app_user_model_id
+        if name.lower() in ["kugou", "Kugou.exe"] or "MoeKoe" in name:
             return session
     raise RuntimeError('找不到酷狗SMTC会话')
 

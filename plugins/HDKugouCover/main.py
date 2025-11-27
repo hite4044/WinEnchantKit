@@ -3,6 +3,7 @@ import json
 import os
 import string
 import sys
+import typing
 import winreg
 from dataclasses import dataclass
 from io import BytesIO
@@ -22,6 +23,7 @@ from winsdk.windows.media import SystemMediaTransportControls as SMTControls, \
     MediaPlaybackType, \
     SystemMediaTransportControlsButtonPressedEventArgs as SMTCButtonPressedEventArgs, \
     SystemMediaTransportControlsButton as SMTCButton, \
+    SystemMediaTransportControlsTimelineProperties as TimelineProperties, \
     MediaPlaybackStatus
 from winsdk.windows.storage import StorageFile, FileAccessMode
 from winsdk.windows.storage.streams import RandomAccessStreamReference
@@ -107,6 +109,7 @@ class Plugin(BasePlugin):
 
         self.sessions_changed_token = None
         self.source_changed_token = None
+        self.timeline_changed_token = None
         self.button_pressed_token = None
         self.has_reg_event = False
 
@@ -256,6 +259,7 @@ class Plugin(BasePlugin):
         logger.info(f"移除事件")
         if self.kugou_session:
             self.kugou_session.remove_playback_info_changed(self.source_changed_token)
+            self.kugou_session.remove_timeline_properties_changed(self.timeline_changed_token)
             self.sessions.remove_sessions_changed(self.sessions_changed_token)
             self.has_reg_event = False
         self.sessions_changed_token = None
@@ -268,7 +272,7 @@ class Plugin(BasePlugin):
             return
         if self.kugou_session is not None:
             logger.info("Kugou SMTC会话已失效")
-            self.source_changed_token = self.kugou_session = self.last_song = None
+            self.source_changed_token = self.timeline_changed_token = self.kugou_session = self.last_song = None
             self.smtc.playback_status = MediaPlaybackStatus.STOPPED
             self.default()
         try:
@@ -277,6 +281,7 @@ class Plugin(BasePlugin):
             if self.config.allways_playing:
                 self.smtc.playback_status = MediaPlaybackStatus.PLAYING
             self.source_changed_token = self.kugou_session.add_playback_info_changed(self.on_source_update)
+            self.timeline_changed_token = self.kugou_session.add_timeline_properties_changed(self.on_timeline_update)
             self.on_source_update()
         except RuntimeError:
             pass
@@ -294,6 +299,19 @@ class Plugin(BasePlugin):
             return
         self.update_smtc_info(self.config.default_title, self.config.default_artist,
                               self.config.default_album_title, self.config.default_album_artist, None)
+
+    def on_timeline_update(self, *_):  # 当歌曲进度条更新时
+        if not self.check_source_valid():
+            return
+        if self.is_moe_koe_music:  # MoeKoeMusic萌音: 进度条支持
+            global_prop = self.kugou_session.get_timeline_properties()
+            prop = TimelineProperties()
+            prop.start_time = global_prop.start_time
+            prop.end_time = global_prop.end_time
+            prop.position = global_prop.position
+            prop.max_seek_time = global_prop.max_seek_time
+            prop.min_seek_time = global_prop.min_seek_time
+            self.smtc.update_timeline_properties(prop)
 
     def on_source_update(self, *_, force_update: bool = False):
         if not self.check_source_valid():
@@ -321,6 +339,8 @@ class Plugin(BasePlugin):
         self.last_reporter_call = perf_counter()
         self.last_reporter_status.append(status)
         self.last_reporter_status.pop(0)
+
+        self.on_timeline_update()
 
         if song_id == self.last_song and not force_update:
             # logger.debug(f"歌曲信息更新, 歌名相同, 不更新, {str([status])[1:-1]}, {song_id}")
@@ -389,6 +409,12 @@ class Plugin(BasePlugin):
         else:
             self.update_smtc_info(info.title, info.artist, info.album_title, info.album_artist, thumbnail)
 
+    @property
+    def is_moe_koe_music(self):
+        if self.kugou_session is not None:
+            return "MoeKoe" in self.kugou_session.source_app_user_model_id
+        return False
+
     def update_smtc_info(self, title: str, artist: str, album_title: str, album_artist: str,
                          thumbnail: RandomAccessStreamReference = None):
         updater = self.smtc.display_updater
@@ -397,7 +423,10 @@ class Plugin(BasePlugin):
         updater.music_properties.title = title
         updater.music_properties.artist = artist
         updater.music_properties.album_title = album_title
-        updater.music_properties.album_artist = " " + album_artist
+        start_fix = " "
+        if self.is_moe_koe_music:
+            start_fix = ""
+        updater.music_properties.album_artist = start_fix + album_artist
         if thumbnail:
             updater.thumbnail = thumbnail
         updater.update()
