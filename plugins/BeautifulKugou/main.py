@@ -38,6 +38,8 @@ def right_corner_border_style(hwnd: int, enable_round_corner: bool, corner_type:
 
 def hide_background_window(main_kugou: int):
     """隐藏酷狗的背景窗口, 如果把酷狗窗口放在白色背景下，会发现边角有一层白色窗口"""
+    from time import sleep
+    sleep(5)
     windows = []
 
     def cbk(hwnd: int, _):
@@ -280,9 +282,9 @@ class Plugin(BasePlugin):
     def update_window(self, hwnd: int):
         # noinspection PyTypeChecker
         color: tuple[int, int, int, int] = tuple(self.config["accent_color"]) + (self.config["accent_alpha"],)
-        if self.config["proc_type"] == ProcType.KUGOU:
-            hide_background_window(hwnd)
         right_corner_border_style(hwnd, self.config["enable_round_corner"], self.config["corner_type"])
         msg = blur_behind(hwnd, color, self.config)
         if msg is not None:
             wx.MessageBox(msg, "错误")
+        if self.config["proc_type"] == ProcType.KUGOU:
+            hide_background_window(hwnd)
