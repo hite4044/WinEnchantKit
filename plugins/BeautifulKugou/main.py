@@ -19,6 +19,7 @@ from lib.kugou_finder import get_window_ex_style_strings
 name = "酷狗美化"
 logger = logging.getLogger("WinEnchantKitLogger_beautiful_kugou")
 
+global_bg_wnd = 0
 
 def right_corner_border_style(hwnd: int, enable_round_corner: bool, corner_type: int):
     # 边框
@@ -68,7 +69,15 @@ def hide_background_window(main_kugou: int):
         target = windows[1]
     if not win32gui.IsWindowVisible(target):
         return
-    win32gui.ShowWindow(target, win32con.SW_MINIMIZE)
+    if target == main_kugou:
+        return
+    from win32 import win32process as win32proc
+    th = win32proc.GetWindowThreadProcessId(main_kugou)
+    th2 = win32proc.GetWindowThreadProcessId(target)
+    if th != th2:
+        return
+    global global_bg_wnd
+    global_bg_wnd = target
 
 
 def blur_behind(hwnd: int, color: tuple[int, int, int, int],
@@ -231,6 +240,7 @@ class Plugin(BasePlugin):
         self.enable = True
 
     def thread_func(self):
+        global global_bg_wnd
         kugou_launched = False
         logger.info(f"插件线程已启动")
         first_flag = True
@@ -248,11 +258,14 @@ class Plugin(BasePlugin):
                 break
             if kugou_launched:
                 try:
+                    if global_bg_wnd != 0:
+                        win32gui.ShowWindow(global_bg_wnd, win32con.SW_HIDE)
                     GetClassName(hwnd_cache)
                     continue
                 except pywintypes.error:
                     logger.info(f"窗口已关闭")
                     kugou_launched = False
+                    global_bg_wnd = 0
 
             kugou_hwnd = get_main_kugou_window(self.config["proc_type"])
             if kugou_hwnd is None:
@@ -287,4 +300,4 @@ class Plugin(BasePlugin):
         if msg is not None:
             wx.MessageBox(msg, "错误")
         if self.config["proc_type"] == ProcType.KUGOU:
-            hide_background_window(hwnd)
+            Thread(target=hide_background_window, args=(hwnd,), daemon=True).start()

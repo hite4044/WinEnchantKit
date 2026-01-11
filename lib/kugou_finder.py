@@ -1,6 +1,6 @@
 import win32con
 from win32api import GetWindowLong
-from win32gui import GetClassName, EnumWindows, FindWindow
+from win32gui import GetClassName, EnumWindows, FindWindow, GetWindowText
 
 style_map: dict[int, str] = {
     getattr(win32con, name): name
@@ -67,7 +67,7 @@ def add_style(raw_style: int, new_style: int) -> int:
 def filter_hwnd(windows: list[int], style_name: str) -> int | None:
     for hwnd in windows:
         style_strings = get_window_style_strings(GetWindowLong(hwnd, win32con.GWL_STYLE))
-        if style_name in style_strings:
+        if style_name in style_strings and GetWindowText(hwnd) != "":
             return hwnd
     return None
 
