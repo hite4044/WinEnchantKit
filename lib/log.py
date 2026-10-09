@@ -1,9 +1,10 @@
 import io
 import logging
 import sys
+import tempfile
 from datetime import datetime
 from os import makedirs
-from os.path import expandvars
+from os.path import abspath, dirname, expandvars, join
 
 
 class AnsiColorCodes:
@@ -83,9 +84,38 @@ def get_plugin_logger(id_: str, name: str):
     return plugin_logger
 
 
-makedirs(expandvars('%APPDATA%/WinEnchantKit/logs'), exist_ok=True)
-time_rotating_file_handler = logging.FileHandler(
-    filename=expandvars(f"%APPDATA%/WinEnchantKit/logs/log_{datetime.now().strftime('%Y-%m-%d')}.log"))
+def _warn(message: str) -> None:
+    """日志系统自身出问题时用标准错误提示，避免再次抛出异常。"""
+    if sys.stderr is not None:
+        try:
+            print(f"[log] {message}", file=sys.stderr)
+        except Exception:  # noqa: BLE001  日志失败不应影响主程序
+            pass
+
+
+def _create_log_file_handler() -> logging.Handler:
+    """创建按日期命名的日志文件处理器。
+
+    %APPDATA% 有可能不可写（例如目录被沙箱或安全软件标记为低完整性），
+    这时依次回退到临时目录和程序目录，避免日志初始化失败导致整个程序无法启动。
+    """
+    filename = f"log_{datetime.now().strftime('%Y-%m-%d')}.log"
+    candidates = [
+        expandvars(f"%APPDATA%/WinEnchantKit/logs/{filename}"),
+        join(tempfile.gettempdir(), "WinEnchantKit", "logs", filename),
+        join(dirname(dirname(abspath(__file__))), "logs", filename),
+    ]
+    for path in candidates:
+        try:
+            makedirs(dirname(path), exist_ok=True)
+            return logging.FileHandler(filename=path)
+        except OSError as e:
+            _warn(f"日志文件不可写，改用下一个位置：{path}（{e}）")
+    _warn("所有日志位置均不可写，本次运行仅输出到控制台。")
+    return logging.NullHandler()
+
+
+time_rotating_file_handler = _create_log_file_handler()
 time_rotating_file_handler.setLevel(logging.DEBUG)
 time_rotating_file_handler.setFormatter(TimedFormatter())
 
