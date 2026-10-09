@@ -497,6 +497,10 @@ class ControlPanel(wx.Frame):
             config_data['plugins'][plugin_id] = prepare
         try:
             content = json.dumps(config_data, indent=4, ensure_ascii=False)
+            if isfile(config_fp):
+                with open(config_fp, "r", encoding="utf-8") as f:
+                    if f.read() == content:
+                        return
             with open(config_fp, "w", encoding="utf-8") as f:
                 f.write(content)
         except OSError:
