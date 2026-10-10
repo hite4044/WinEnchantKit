@@ -12,7 +12,7 @@
     check_source_valid()             源会话是否仍有有效歌曲
     get_source_status()              源会话播放状态
     get_source_info()                源会话 SessionMediaProperties (交给 MusicBackend 解析)
-    is_kugou_lyric_source()          源会话是否为 MoeKoeMusic 萌音 (进度条/空格修正用)
+    is_kugou_lyric_source()          源会话是否为 MoeKoeMusic 萌音 -> source_start_fix (空格修正)
     display(music, cover_image)      把歌曲信息 (含封面) 写到自建 SMTC 会话
     display_default()                写入配置里的默认信息
     update_timeline()                进度条透传 (仅萌音)
@@ -23,9 +23,11 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Any, Callable, Union
+from typing import Any, Callable
+from typing import cast as type_cast
 
 from PIL import Image
+from win32.lib.win32netcon import PLATFORM_ID_NT
 from winsdk.windows.media import (
     MediaPlaybackStatus,
     MediaPlaybackType,
@@ -46,19 +48,19 @@ from winsdk.windows.storage.streams import (
     RandomAccessStreamReference,
 )
 
-from _smtc_backend_base import (
+from smtc_backend.base import (
     StandardMusicInfo,
     plugin_logger,
     wait_result,
 )
 
-from typing import cast as type_cast
-
 logger = plugin_logger
 
+# 需要匹配的源会话标记 (source_app_user_model_id 小写子串): 酷狗 + 萌音 + 网易云
+PLATFORM_SOURCES = {"kugou": ["kugou", "moekoe"],
+                  "netease": ["netease", "cloudmusic", "music.163"]}
 
 class SMTCHost:
-    smtc: SMTControls
     """插件自建 SMTC 会话 + 源会话的宿主"""
 
     # 自建会话的 app_media_id (Windows 用它区分不同会话, 固定值保证外部能识别本插件)
@@ -67,7 +69,7 @@ class SMTCHost:
     def __init__(self):
         self.config: dict[str, Any] = {}
         self.sessions: SessionManager | None = None
-        self.smtc: SMTControls = type_cast(SMTControls, None)
+        self.smtc: SMTControls | None = None
         self.player: MediaPlayer | None = None
         self.source: Session | None = None
         self.source_app_id: str | None = None
@@ -101,7 +103,7 @@ class SMTCHost:
         logger.info("创建SMTC对象")
         self.player = MediaPlayer()
         self.player.command_manager.is_enabled = False
-        self.smtc = self.player.system_media_transport_controls
+        self.smtc: SMTControls | None = self.player.system_media_transport_controls
         self.smtc.is_enabled = True
         self.smtc.is_play_enabled = True
         self.smtc.is_pause_enabled = True
@@ -114,7 +116,7 @@ class SMTCHost:
 
     def destroy(self):
         """销毁自建会话并断开源会话 (原 main.py::stop_raw 中对象置空的部分)"""
-        self.smtc: SMTControls = None
+        self.smtc: SMTControls | None = None
         self.player = None
         self.release_source()
         self._frames.clear()
@@ -127,20 +129,19 @@ class SMTCHost:
 
     # ------------------------------------------------------------ 源会话
     def find_source(self) -> Session:
-        """在系统会话列表中找源平台会话。
-
-        匹配酷狗 + MoeKoeMusic 萌音 (萌音托管酷狗播放, 因此也纳入源会话范围)。
-        """
+        """在系统会话列表中找源平台会话 (酷狗 / 萌音 / 网易云等, 见 ``PLATFORM_SOURCES``)。"""
         if self.sessions is None:
             self.sessions = wait_result(SessionManager.request_async())
+        music_platform = self.config.get("music_platform", "kugou")
+        SOURCES = PLATFORM_SOURCES[music_platform]
         for session in self.sessions.get_sessions():
             app_user_model_id = session.source_app_user_model_id
             name = (app_user_model_id or "").lower()
-            if name in ("kugou", "kugou.exe") or "moekoe" in name:
-                logger.info("找到 Kugou SMTC会话")
+            if any(marker in name for marker in SOURCES):
+                logger.info(f"找到源 SMTC会话: {app_user_model_id}")
                 self.set_source(session, app_user_model_id)
                 return session
-        raise RuntimeError("找不到酷狗SMTC会话")
+        raise RuntimeError("找不到音乐平台的SMTC会话")
 
     def set_source(self, session: Session, app_id: str | None = None):
         self.source = session
@@ -154,12 +155,6 @@ class SMTCHost:
         self.source = None
         self.source_app_id = None
         self.fake_playing = False
-
-    def is_kugou_lyric_source(self) -> bool:
-        """源会话是否为 MoeKoeMusic 萌音 (原 main.py::is_moe_koe_music)"""
-        if self.source is None:
-            return False
-        return "MoeKoe" in (self.source.source_app_user_model_id or "")
 
     def check_source_valid(self) -> bool:
         """源会话是否仍在播放有效歌曲。
@@ -189,7 +184,7 @@ class SMTCHost:
             return MediaPlaybackStatus.STOPPED
         # playback_status是GlobalSystemMediaTransportControlsSessionPlaybackStatus对象，需要转换为MediaPlaybackStatus对象
         return getattr(MediaPlaybackStatus,
-                self.source.get_playback_info().playback_status.name)
+                       self.source.get_playback_info().playback_status.name)
 
     # ------------------------------------------------------------ 自建会话内容
     @property
@@ -232,15 +227,13 @@ class SMTCHost:
         album_title, album_artist = music.album_title, music.album_artist
         if self.exchange_title2album:
             artist, album_artist = album_artist, artist
-        # 萌音会话不需要前置空格; 其它平台靠这个额外空格把高清会话排在后面, 避免抢占
-        start_fix = " " if not self.is_kugou_lyric_source() else ""
         updater = self.smtc.display_updater
         updater.app_media_id = self.APP_MEDIA_ID
         updater.type = MediaPlaybackType.MUSIC
         updater.music_properties.title = title
         updater.music_properties.artist = artist
         updater.music_properties.album_title = album_title
-        updater.music_properties.album_artist = start_fix + album_artist
+        updater.music_properties.album_artist = " " + album_artist
         if cover_image is not None:
             updater.thumbnail = self._stream_reference(cover_image)
         updater.update()
@@ -263,7 +256,7 @@ class SMTCHost:
         """把源会话的进度条透传给自建会话 (仅萌音需要, 原 main.py::on_timeline_update)"""
         if self.smtc is None or self.source is None:
             return
-        if not self.is_kugou_lyric_source():
+        if "moekoe" not in (self.source.source_app_user_model_id or "").lower():
             return
         global_prop = self.source.get_timeline_properties()
         prop = TimelineProperties()

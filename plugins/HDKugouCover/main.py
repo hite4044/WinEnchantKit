@@ -372,8 +372,9 @@ class Plugin(BasePlugin):
                     image = Image.open(BytesIO(content))
                     icc_profile = ImageCms.getOpenProfile('plugins/HDKugouCover/sRGB_v4_ICC_preference.icc')
                     if self.config.cover_cache_format == CoverCacheFmt.JPG:
+                        image = image.convert("RGB")
                         image.save(cover_cache_fp + ".jpg", "JPEG", quality=self.config.cover_cache_quality,
-                                   icc_profile=icc_profile.tobytes())
+                                   )#icc_profile=icc_profile.tobytes())
                     elif self.config.cover_cache_format == CoverCacheFmt.PNG:
                         image = image.convert("RGBA")
                         image.save(cover_cache_fp + ".png", "PNG")
@@ -418,7 +419,7 @@ class Plugin(BasePlugin):
     def update_smtc_info(self, title: str, artist: str, album_title: str, album_artist: str,
                          thumbnail: RandomAccessStreamReference = None):
         updater = self.smtc.display_updater
-        updater.app_media_id = "hd_cover_kugou"
+        updater.app_media_id = "hd_music_cover"
         updater.type = MediaPlaybackType.MUSIC
         updater.music_properties.title = title
         updater.music_properties.artist = artist

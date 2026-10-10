@@ -2,43 +2,46 @@
 """MusicSMTCWrapper (音乐封面高清化) 插件入口。
 
 Plugin 只负责流程编排:
-    读取配置中的歌曲平台
+    读取配置中的歌曲平台 / 识别源会话属于哪个平台
       → 查找 SMTC 对应会话, 获取 SessionMediaProperties   (SMTCHost)
-      → 交给对应 MusicBackend.get_music_info() 处理        (backend)
+      → 交给对应 MusicBackend.get_music_info() 处理        (smtc_backend.*)
       → 拿到封面后交给 SMTCHost 更新到插件的 SMTC 会话      (SMTCHost)
 
-SMTC 会话语义在 smtc_host.SMTCHost；封面搜索/缓存/平台差异在 backend\\ 下。
-新增音乐平台后端: 实现 backend\\base.py 的 MusicBackend 子类 + 建缓存目录,
-然后在下面 _build_backends() 里注册一行即可, 不需要改动 Plugin 的编排逻辑。
+SMTC 会话语义在 smtc_host.SMTCHost；封面搜索/缓存/平台差异在 smtc_backend\\ 下。
+新增音乐平台后端: 在 smtc_backend\\ 下新增模块, 实现 MusicBackend 子类 + 声明
+platform_id / cache_name / source_markers, 然后在 _build_backends() 里注册一行即可。
 """
 import os
 import sys
+
+# 插件加载器只把插件根目录放进 sys.path, 而后端包在本目录的 smtc_backend/ 下, 这里补一次。
+_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+if _PLUGIN_DIR not in sys.path:
+    sys.path.insert(0, _PLUGIN_DIR)
+
 import winreg
-from enum import Enum
 from os.path import expandvars, join
 from queue import Queue
 from threading import Thread
-from typing import Any
 
 import pylnk3
 import wx
 import win32con as con
-from PIL import Image
 from win32comext.shell.shell import ShellExecuteEx
 from winsdk.windows.media import MediaPlaybackStatus
 from winsdk.windows.media.control import (
     GlobalSystemMediaTransportControlsSessionMediaProperties as SessionMediaProperties,
 )
 
-from _smtc_backend_base import (
+from base import *
+from music_reporter import MusicReportManager
+from smtc_backend import kugou, netease
+from smtc_backend.base import (
     FULL_COVER_SIZE,
     MusicBackend,
     StandardMusicInfo,
     plugin_logger,
 )
-from _smtc_backend_kugou import KugouMusicBackend
-from base import *
-from music_reporter import MusicReportManager
 from smtc_host import SMTCHost
 
 name = "高清酷狗封面"
@@ -56,7 +59,9 @@ class PluginConfig(ModuleConfigPlus):
         super().__init__()
         self.tip: TipParam = TipParam("插件启用后如果仍然不显示高清封面, 请在快速设置面板(开WIFI的地方)")
         self.tip2: TipParam = TipParam("箭头按钮切换SMTC会话, 直到找到那个专辑名前多了一个空格的SMTC会话")
-        self.music_platform: ChoiceParamPlus | str = ChoiceParamPlus("kugou", {"kugou": "Kugou"}, "歌曲平台")
+        self.music_platform: ChoiceParamPlus | str = ChoiceParamPlus("kugou",
+                                                                     {"kugou": "Kugou", "netease": "网易云"},
+                                                                     "歌曲平台")
         self.cover_size: ChoiceParam | str = ChoiceParam("480",
                                                          ["480", "400", "240", "150", "120", "100", "64"],
                                                          "封面尺寸")
@@ -91,10 +96,22 @@ class Action(Enum):
 
 
 def _build_backends(save_format: str | None, save_quality: int) -> dict[str, MusicBackend]:
-    """平台 id -> 后端实例。新增后端只需在这里加一行 + 建好缓存目录。"""
+    """平台 id -> 后端实例。新增后端只需新建模块并在这里加一行。"""
     return {
-        KugouMusicBackend.platform_id: KugouMusicBackend(save_format, save_quality),
+        kugou.KugouMusicBackend.platform_id: kugou.KugouMusicBackend(save_format, save_quality),
+        netease.NeteaseMusicBackend.platform_id: netease.NeteaseMusicBackend(save_format, save_quality),
     }
+
+
+def _find_backend(backends: dict[str, MusicBackend], source_id: str | None,
+                  fallback_platform: str) -> MusicBackend | None:
+    """按源会话的应用 id 找对应后端 (source_markers); 认不出来时用配置里选的平台"""
+    source = (source_id or "").lower()
+    if source:
+        for backend in backends.values():
+            if any(marker in source for marker in getattr(backend, "source_markers", ())):
+                return backend
+    return backends.get(fallback_platform)
 
 
 class Plugin(BasePlugin):
@@ -129,13 +146,9 @@ class Plugin(BasePlugin):
     def platform_id(self) -> str:
         return str(self.config.music_platform)
 
-    @property
-    def current_backend(self) -> MusicBackend | None:
-        """按配置里的歌曲平台动态取后端 (配置切换平台后立即生效)"""
-        return self.get_backend()
-
-    def get_backend(self, platform_id: str = None) -> MusicBackend | None:
-        return self.backends.get(platform_id or self.platform_id)
+    def get_backend(self, source_id: str = None) -> MusicBackend | None:
+        """按源会话应用 id 取后端; 认不出来时用配置里选的平台"""
+        return _find_backend(self.backends, source_id, self.platform_id)
 
     def _cover_save_policy(self) -> tuple[str | None, int]:
         """把旧的封面缓存格式/质量配置翻译成缓存层需要的 (格式, 质量)。
@@ -218,6 +231,9 @@ class Plugin(BasePlugin):
                 "enable_music_report"] and not self.config.enable_music_report:
                 self.music_reporter.flush()
 
+            if old_config["music_platform"] != new_config["music_platform"]:
+                self.update_source_session()
+
     def action_thread_func(self):
         while self.action_queue.empty():
             action = self.action_queue.get()
@@ -257,8 +273,12 @@ class Plugin(BasePlugin):
     def on_session_changed(self, *_):
         if self.check_source_valid():
             return
+        logger.info("SMTC会话已失效")
+        # 如果SMTC会话已失效，则尝试重新查找SMTC会话，如果没有则不管
+        self.update_source_session()
+
+    def update_source_session(self):
         if self.smtc_host.has_source:
-            logger.info("Kugou SMTC会话已失效")
             self.smtc_host.release_source()
             self.source_changed_token = self.timeline_changed_token = self.last_song = None
             self.smtc_host.set_playback_status(MediaPlaybackStatus.STOPPED)
@@ -308,7 +328,8 @@ class Plugin(BasePlugin):
         if song_id == self.last_song and not force_update:
             # logger.debug(f"歌曲信息更新, 歌名相同, 不更新, {str([status])[1:-1]}, {song_id}")
             return
-        backend = self.current_backend or self.get_backend()
+        # 后端按源会话应用 id 选 (切换平台/软件时自动切换), 认不出来才用配置里选的平台
+        backend = self.get_backend(self.smtc_host.source_app_id)
         if backend is None:
             logger.error(f"找不到平台 [{self.platform_id}] 对应的后端")
             return
@@ -323,13 +344,18 @@ class Plugin(BasePlugin):
         封面获取/缓存细节在 backend, SMTC 写入细节在 SMTCHost; 这里只做编排。
         """
         if music is None:
-            logger.warning("搜索不到歌曲信息, 使用酷狗原封面")
+            logger.warning("搜索不到歌曲信息, 使用原封面")
             return
         # 归一化可能为空的字段
         music.album_title = music.album_title or ""
         music.album_artist = music.album_artist or ""
-        size_text = f"{music.cover.width}x{music.cover.height}" if music.cover is not None else "无封面"
-        logger.info(f"更新歌曲信息: {music.title} - {music.artist}, 封面分辨率: {size_text}")
+        if music.cover is None:
+            cover_text = "无高清封面(保留原封面)"
+        elif music.cover_slot:
+            cover_text = f"{music.cover.width}x{music.cover.height} (缓存 {music.cover_slot}px)"
+        else:
+            cover_text = f"{music.cover.width}x{music.cover.height}"
+        logger.info(f"更新歌曲信息: {music.title} - {music.artist}, 封面: {cover_text}")
         self.smtc_host.display(music)
 
     # ================================================================== 音乐报告

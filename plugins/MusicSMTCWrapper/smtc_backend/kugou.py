@@ -1,20 +1,15 @@
 # -*- coding: utf-8 -*-
 """酷狗音乐后端: 搜索 / 匹配 / 封面获取 / 缓存编撰。
 
-模板方法流程在 :class:`_smtc_backend_base.MusicBackend`; 本模块只写酷狗自己的部分:
+模板方法流程在 :class:`smtc_backend.base.MusicBackend`; 本模块只写酷狗自己的部分:
 
 * :meth:`KugouMusicBackend.from_cache`    —— 把缓存记录 + 本地封面解读成歌曲信息
 * :meth:`KugouMusicBackend.from_web`      —— 酷狗搜索接口 -> 下载封面 -> 写缓存
 * :meth:`KugouMusicBackend.from_raw_smtc` —— 源 SMTC 会话自带低清封面兜底
 * :meth:`KugouMusicBackend.encode_record` / :meth:`decode_record` —— 缓存数据编撰与解读
 
-封面尺寸约定: ``FULL_COVER_SIZE`` (即 -1) 表示“获取最大封面”; 上限 ``MAX_COVER_SIZE``。
-缓存里「最大封面」用图片自身尺寸作文件名标记, 可据此判断请求尺寸是否已被覆盖。
-
-命名说明: 模块顶层名字带 ``_smtc_backend_`` 前缀是刻意的。插件加载器会把插件根目录插到
-``sys.path[0]`` (``gui/control_panel.py::load_plugin``), 而 plugins.HDKugouCover 已经占用了
-顶层名字 ``backend`` / ``base``; 私有前缀保证本插件的模块在任何加载顺序下都能被唯一解析,
-也不会污染 / 破坏其它插件。
+封面地址约定: ``trans_param.union_cover`` 是形如 ``http://.../{size}/xxx.jpg`` 的模板,
+``size`` 传 ``FULL_COVER_SIZE`` 表示去掉 ``/{size}`` 取原图。
 """
 from __future__ import annotations
 
@@ -29,22 +24,24 @@ from requests.exceptions import SSLError
 from winsdk.windows.media.control import (
     GlobalSystemMediaTransportControlsSessionMediaProperties as SessionMediaProperties,
 )
-from winsdk.windows.security.cryptography import CryptographicBuffer
-from winsdk.windows.storage.streams import DataReader
 
-from _smtc_backend_base import (
+from .base import (
+    DEFAULT_COVER_SIZE,
     FULL_COVER_SIZE,
     MAX_COVER_SIZE,
     MusicBackend,
     StandardMusicInfo,
     make_music_hash,
     plugin_logger,
-    wait_result,
+    prepare_cover,
+    read_raw_cover,
 )
 
 logger = plugin_logger
 
-# ---------------------------------------------------------------- 原样搬运的常量
+# 源会话匹配标记 (source_app_user_model_id 小写子串): 酷狗本体 + 萌音 (托管酷狗播放)
+SOURCE_MARKERS = ("kugou", "moekoe")
+
 HEADERS = {'User-Agent': '[HDKugouCover(Github)(WinEnchantKit)] Music Search'}
 SEARCH_URL = "http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={keyword}&page=1"
 OTHER_NAME_PATTERN = re.compile(r"\([^()]+\)")
@@ -155,41 +152,13 @@ def clean_music_title(title: str) -> str:
     return name
 
 
-def read_raw_cover(props: SessionMediaProperties) -> Image.Image | None:
-    """读取源 SMTC 会话自带的低清封面; 任何失败都返回 None (空值防御)。"""
-    try:
-        thumbnail = getattr(props, "thumbnail", None)
-        if thumbnail is None:
-            return None
-        stream = wait_result(thumbnail.open_read_async())
-        count = int(stream.size) if stream is not None else 0
-        if count <= 0:
-            return None
-        try:
-            # open_read_async 返回的流定位在 0; 防御性复位, 否则 load_async 可能 E_BOUNDS
-            stream.seek(0)
-        except Exception:
-            pass
-        reader = DataReader(stream)
-        wait_result(reader.load_async(count))
-        buffer = reader.read_buffer(count)
-        data = CryptographicBuffer.copy_to_byte_array(buffer) if buffer is not None else None
-        if not data:
-            return None
-        with Image.open(BytesIO(bytes(data))) as image:
-            image.load()
-            return image.copy()
-    except Exception as e:
-        logger.debug(f"读取SMTC缩略图失败: {e.__class__.__name__}: {e}")
-        return None
-
-
 # ---------------------------------------------------------------- 后端
 class KugouMusicBackend(MusicBackend):
     """酷狗平台后端 (只实现酷狗自己的业务; 三级流程由基类模板方法串起来)"""
 
     platform_id = "kugou"
     cache_name = "kugou"
+    source_markers = SOURCE_MARKERS
 
     def __init__(self, cover_format=None, cover_quality: int = 90):
         self.cover_format = cover_format
@@ -239,18 +208,24 @@ class KugouMusicBackend(MusicBackend):
         record = self.music_cache.get(music_hash)
         if record is None or self.decode_record(record, music_info) is None:
             return None
-        cover = self.music_cache.find_cover(music_hash, size)
-        if cover is None:
+        found = self.music_cache.find_cover(music_hash, size)
+        if found is None:
             # 缓存信息在但封面文件加载失败 -> 返回失败结果, 交给联网 / 兜底
             logger.warning(f"本地缓存封面加载失败: {music_info.title} - {music_info.artist}")
             return None
-        music_info.cover = cover
+        cover, slot = found
+        music_info.cover = prepare_cover(cover, size)
+        music_info.cover_slot = slot
         music_info.has_cover = True
         return music_info
 
     def from_web(self, music_info: StandardMusicInfo, size: int,
                  props: SessionMediaProperties) -> StandardMusicInfo | None:
-        """联网: 搜索 -> 下载最大封面 -> 写缓存 (之后各尺寸请求复用同一份)"""
+        """联网: 搜索 -> 按请求尺寸下载封面 -> 写缓存。
+
+        只有在本地缓存里没有任何 >= 请求尺寸的封面时才会到这里 (见基类模板方法),
+        因此直接按请求尺寸取图, 不再一律下载原图。
+        """
         title, artist = music_info.title, music_info.artist
         try:
             song = search_music(clean_music_title(title), artist,
@@ -262,8 +237,13 @@ class KugouMusicBackend(MusicBackend):
         if not template:
             logger.warning(f"搜索结果缺少封面模板 (union_cover): {artist} - {title}")
             return None
+        music_hash = music_hash_for(title, artist)
+        # 联网取图尺寸: 本地一个封面都没有 -> 就按请求尺寸取; 已有但都比请求小 / 要求最大封面 -> 取最大封面
+        # (size 为 FULL_COVER_SIZE 时 cover_url 会去掉 /{size} 占位符)
+        fetch_size = size if size != FULL_COVER_SIZE and not self.music_cache.has_cover(music_hash) \
+            else FULL_COVER_SIZE
         try:
-            resp = requests.get(cover_url(template, FULL_COVER_SIZE), headers=HEADERS, data=None)
+            resp = requests.get(cover_url(template, fetch_size), headers=HEADERS, data=None)
             with Image.open(BytesIO(resp.content)) as image:
                 image.load()
                 cover = image.copy()
@@ -272,16 +252,12 @@ class KugouMusicBackend(MusicBackend):
             return None
         if max(cover.size) > MAX_COVER_SIZE:
             cover.thumbnail((MAX_COVER_SIZE, MAX_COVER_SIZE))
-        music_hash = music_hash_for(title, artist)
-        slot = self.music_cache.save_cover(cover, music_hash, FULL_COVER_SIZE, title, artist)
+        slot = self.music_cache.save_cover(cover, music_hash, fetch_size, title, artist)
         self.music_cache.put(music_hash, self.encode_record(music_info, {"cover": template}))
-        # 按请求尺寸返回: 最大封面原样, 否则缩到请求尺寸(不放大)
-        want = max(cover.size) if size == FULL_COVER_SIZE else min(size, max(cover.size))
-        if max(cover.size) > want:
-            cover.thumbnail((want, want))
-        music_info.cover = cover
+        music_info.cover = prepare_cover(cover, size)
+        music_info.cover_slot = slot if slot is not None else max(cover.size)
         music_info.has_cover = True
-        logger.info(f"已获取高清封面: {title} - {artist} (请求 {size}, 缓存标记 {slot})")
+        logger.info(f"已获取高清封面: {title} - {artist} (请求 {size}, 缓存标记 {fetch_size})")
         return music_info
 
     def from_raw_smtc(self, music_info: StandardMusicInfo, size: int,
@@ -291,5 +267,6 @@ class KugouMusicBackend(MusicBackend):
         if cover is None:
             return None
         music_info.cover = cover
+        music_info.cover_slot = max(cover.size)
         music_info.has_cover = True
         return music_info

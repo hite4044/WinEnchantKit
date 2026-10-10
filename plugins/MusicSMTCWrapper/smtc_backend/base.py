@@ -1,18 +1,14 @@
 # -*- coding: utf-8 -*-
 """平台无关契约层: 数据类 / 缓存器 / 后端基类 (模板方法)。
 
-本模块承载 MusicSMTCWrapper 的“契约层”:
-
 * :class:`StandardMusicInfo` —— 纯数据 dataclass (一组歌曲信息的包装, 不参与缓存)
 * :class:`MusicCache`        —— 缓存的加载 / 保存 / 查找器, 由后端持有
 * :class:`MusicBackend`      —— 后端抽象基类, 用模板方法串起
   ``from_cache -> from_web -> from_raw_smtc`` 的统一流程, 派生类只写自己的业务
-* 通用工具: ``wait_result`` / ``plugin_logger`` / ``make_music_hash`` / ``sanitize_filename``
+* 通用工具: ``wait_result`` / ``read_raw_cover`` / ``make_music_hash`` / ``sanitize_filename`` / ``normalize_size``
 
-命名说明: 文件名带 ``_smtc_backend_`` 前缀是刻意的。WinEnchantKit 的插件加载器会把
-插件目录插到 ``sys.path[0]``(见 ``gui/control_panel.py::load_plugin``), 而 plugins.HDKugouCover
-已经在 ``sys.modules`` 里占用了顶层名字 ``backend`` 与 ``base``; 使用私有前缀可以保证本插件的
-模块在任何插件加载顺序下都能被唯一解析, 且不会污染/破坏其它插件。
+封面尺寸约定: ``FULL_COVER_SIZE`` (即 -1) 表示“获取最大封面”; 上限 ``MAX_COVER_SIZE`` (8000);
+``prepare_cover`` 统一“不放大”的返回规则, ``MusicCache.find_cover`` 统一“取 >= 请求尺寸的最小者”的查找规则。
 """
 from __future__ import annotations
 
@@ -23,6 +19,7 @@ import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from io import BytesIO
 from os import makedirs
 from os.path import isfile, join
 from time import sleep
@@ -33,6 +30,8 @@ from winsdk.windows.foundation import AsyncStatus, IAsyncOperation
 from winsdk.windows.media.control import (
     GlobalSystemMediaTransportControlsSessionMediaProperties as SessionMediaProperties,
 )
+from winsdk.windows.security.cryptography import CryptographicBuffer
+from winsdk.windows.storage.streams import DataReader
 
 
 def _resolve_plugin_logger():
@@ -59,10 +58,12 @@ logger = plugin_logger
 # 所有后端缓存目录的公共父目录
 CACHE_ROOT = "cache"
 
-# 默认封面尺寸 (与原 main.py 的 load_cover 默认值一致)
+# 默认封面尺寸
 DEFAULT_COVER_SIZE = 480
 # 「获取最大封面」的特殊尺寸值
 FULL_COVER_SIZE = -1
+# 缓存文件名里标识“最大封面”的标记: {歌曲名} - {作者}_{hash}_full.{后缀}
+FULL_SLOT = "_full"
 # 封面尺寸硬限制: 超过该值一律按“最大封面”处理
 MAX_COVER_SIZE = 8000
 
@@ -72,8 +73,8 @@ SaveFormat = ImageFormat | None
 
 # Windows 文件名非法字符 + 控制字符
 _ILLEGAL_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
-# 封面缓存文件名尾部: _{hash}_{size}.{后缀} (歌名/作者里可能有下划线, 所以必须从右侧解析)
-_COVER_SUFFIX_PATTERN = re.compile(r"^(?P<hash>[0-9a-fA-F]+)_(?P<size>\d+)\.(?P<ext>jpg|jpeg|png)$")
+# 封面缓存文件名尾部: _{hash}_{尺寸}.{后缀}; 尺寸可以是数字, 也可以是 full (最大封面)。
+# 解析只用「最后一个下划线 + 扩展名」做锚点 (见 parse_cover_filename), 因为歌名/作者里可能有下划线。
 _COVER_MAX_NAME_LEN = 80
 
 
@@ -88,22 +89,29 @@ def normalize_size(size: int) -> int:
     return size if size > 0 else DEFAULT_COVER_SIZE
 
 
-def parse_cover_filename(filename: str) -> tuple[int, int] | None:
-    """从 ``{歌曲名} - {作者}_{hash}_{size}.{后缀}`` 里解出 (music_hash, size)。
+def parse_cover_filename(filename: str) -> tuple[int, int | None] | None:
+    """从 ``{歌曲名} - {作者}_{hash}_{尺寸}.{后缀}`` 里解出 (music_hash, 尺寸标记)。
 
-    歌名/作者可能包含下划线或点号, 因此只用「最后一个下划线 + 扩展名」作为分隔锚点。
+    尺寸标记为 ``None`` 表示文件名用的是 ``_full`` (最大封面); 歌名/作者可能包含下划线
+    或点号, 因此只用「最后一个下划线 + 扩展名」作为分隔锚点。
     """
     stem, dot, _ext = filename.rpartition(".")
     if not dot:
         return None
     head, underscore, size_part = stem.rpartition("_")
-    if not underscore or not size_part.isdigit():
+    if not underscore:
+        return None
+    if size_part.lstrip("_") == FULL_SLOT.lstrip("_"):
+        size = None
+    elif size_part.isdigit():
+        size = int(size_part)
+    else:
         return None
     _prefix, hash_sep, hash_part = head.rpartition("_")
     if not hash_sep:
         return None
     try:
-        return int(hash_part, 16), int(size_part)
+        return int(hash_part, 16), size
     except ValueError:
         return None
 
@@ -133,12 +141,64 @@ def sanitize_filename(name: str) -> str:
     return cleaned or "unknown"
 
 
+def read_raw_cover(props: SessionMediaProperties) -> Image.Image | None:
+    """读取源 SMTC 会话自带的低清封面; 任何失败都返回 None (空值防御)。
+
+    平台无关 (所有源会话都可能有 thumbnail), 因此放在契约层供各后端复用。
+    """
+    try:
+        thumbnail = getattr(props, "thumbnail", None)
+        if thumbnail is None:
+            return None
+        stream = wait_result(thumbnail.open_read_async())
+        count = int(stream.size) if stream is not None else 0
+        if count <= 0:
+            return None
+        try:
+            # open_read_async 返回的流定位在 0; 防御性复位, 否则 load_async 可能 E_BOUNDS
+            stream.seek(0)
+        except Exception:
+            pass
+        reader = DataReader(stream)
+        wait_result(reader.load_async(count))
+        buffer = reader.read_buffer(count)
+        data = CryptographicBuffer.copy_to_byte_array(buffer) if buffer is not None else None
+        if not data:
+            return None
+        with Image.open(BytesIO(bytes(data))) as image:
+            image.load()
+            return image.copy()
+    except Exception as e:
+        logger.debug(f"读取SMTC缩略图失败: {e.__class__.__name__}: {e}")
+        return None
+
+
+def _entry_order(entry: tuple[int | None, int, str]) -> tuple[int, int]:
+    """索引项排序: 数字尺寸按大小升序, ``_full`` (最大封面) 排最后"""
+    marker = entry[0]
+    return (1, 0) if marker == FULL_SLOT else (0, int(marker or 0))
+
+
+def prepare_cover(cover: Image.Image, size: int) -> Image.Image:
+    """按请求尺寸缩放封面 (不放大)。
+
+    ``size`` 为 ``FULL_COVER_SIZE`` 或封面本身不大于请求尺寸时原样返回。
+    「缓存标记尺寸」(``StandardMusicInfo.cover_slot``) 由调用方按 ``MusicCache`` 的
+    实际落盘/查找结果设置, 不在这里推算。
+    """
+    if size != FULL_COVER_SIZE and max(cover.size) > size:
+        cover.thumbnail((size, size))
+    return cover
+
+
 @dataclass
 class StandardMusicInfo:
     """标准化歌曲信息: 纯数据 dataclass, 只是一组歌曲信息的包装 (不参与缓存)。
 
-    ``cover`` 是后端按 ``size`` 取好的 ``PIL.Image.Image``; ``has_cover`` 为 False 表示
-    没有可用封面 (此时 ``cover`` 为 None), ``Plugin``/``SMTCHost`` 会保留源平台原缩略图。
+    ``cover`` 是后端按 ``size`` 取好的 ``PIL.Image.Image``; ``cover_slot`` 是这份封面在
+    本地缓存里的标记尺寸 (``MusicCache`` 落盘/查找得到, 最大封面即图片真实尺寸), 用于日志;
+    ``has_cover`` 为 False 表示没有可用封面 (此时 ``cover`` 为 None), ``SMTCHost`` 会保留
+    源平台原缩略图。
     """
 
     title: str
@@ -148,6 +208,7 @@ class StandardMusicInfo:
     length: float
     cover: Image.Image | None = None
     has_cover: bool = False
+    cover_slot: int = 0
 
     @classmethod
     def from_props(cls, props: SessionMediaProperties, length: float = 0.0) -> "StandardMusicInfo":
@@ -173,7 +234,7 @@ class MusicCache:
       value 是后端提供的具体歌曲信息; 整体存在 ``info_file`` 指向的 JSON 里。
     * 封面: 按 ``{歌曲名} - {作者}_{music_hash}_{尺寸}.{后缀}`` 命名存放在
       ``cover_dir``; 用内存索引 ``hash -> [(尺寸, 文件名)]`` 加速查找。
-    * 封面尺寸硬限制 8000x8000; ``"full"`` 标记由后端在信息里自行记录。
+    * 封面尺寸硬限制 8000x8000; “最大封面”用图片真实尺寸作文件名标记。
     """
 
     cover_dir: str
@@ -192,7 +253,7 @@ class MusicCache:
             try:
                 with open(self.info_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                self._info = {int(key, base=16): value for key, value in data.items()} if isinstance(data, dict) else {}
+                self._info = {int(key, 16): value for key, value in data.items()} if isinstance(data, dict) else {}
             except (OSError, ValueError) as e:
                 logger.warning(f"读取歌曲信息缓存失败: {e}")
                 self._info = {}
@@ -208,7 +269,7 @@ class MusicCache:
             makedirs(parent, exist_ok=True)
         try:
             with open(self.info_file, "w+", encoding="utf-8") as f:
-                f.write(json.dumps({str(k): v for k, v in self._info.items()},
+                f.write(json.dumps({f"{k:016x}": v for k, v in self._info.items()},
                                    ensure_ascii=False, indent=4))
         except OSError as e:
             logger.warning(f"保存歌曲信息缓存失败: {e}")
@@ -224,9 +285,12 @@ class MusicCache:
         self._info[music_hash] = value
 
     # ------------------------------------------------------------------ 封面文件
-    def reload_index(self) -> dict[int, list[tuple[int, str]]]:
-        """重建封面内存索引: music_hash -> [(尺寸, 文件名), ...]"""
-        index: dict[int, list[tuple[int, str]]] = {}
+    def reload_index(self) -> dict[int, list[tuple[int | None, int, str]]]:
+        """重建封面内存索引: music_hash -> [(尺寸标记, 图片实际尺寸, 文件名), ...]
+
+        尺寸标记为 ``FULL_SLOT`` 表示文件名用的是 ``_full`` (最大封面)。
+        """
+        index: dict[int, list[tuple[int | None, int, str]]] = {}
         try:
             names = os.listdir(self.cover_dir)
         except FileNotFoundError:
@@ -239,9 +303,18 @@ class MusicCache:
             if parsed is None:
                 continue
             music_hash, size = parsed
-            index.setdefault(music_hash, []).append((size, name))
+            actual = 0
+            if size is None:
+                # _full 文件: 从图片本身读出真实尺寸 (只读文件头, 不解码像素)
+                try:
+                    with Image.open(join(self.cover_dir, name)) as image:
+                        actual = max(image.size)
+                except OSError:
+                    actual = 0
+            marker = FULL_SLOT if size is None else size
+            index.setdefault(music_hash, []).append((marker, actual, name))
         for entries in index.values():
-            entries.sort()
+            entries.sort(key=_entry_order)
         self._index = index
         self._indexed = True
         return index
@@ -251,12 +324,23 @@ class MusicCache:
             self.reload_index()
 
     def sizes(self, music_hash: int) -> list[int]:
-        """本地实际存在的封面尺寸列表 (升序)"""
+        """本地实际存在的封面尺寸列表 (不论文件名标记, 一律给真实像素尺寸)"""
         self._ensure_index()
-        return [size for size, _name in self._index.get(music_hash, [])]
+        return [max(marker if marker != FULL_SLOT else 0, actual)
+                for marker, actual, _name in self._index.get(music_hash, [])]
 
-    def find_cover(self, music_hash: int, size: int) -> Image.Image | None:
-        """按 ``hash + 尺寸`` 查封面: 优先 ``>= size`` 的最小者, 没有则取最大者并缩放"""
+    def has_cover(self, music_hash: int) -> bool:
+        """本地是否已经有这张封面的任意尺寸"""
+        self._ensure_index()
+        return bool(self._index.get(music_hash))
+
+    def find_cover(self, music_hash: int, size: int) -> tuple[Image.Image, int] | None:
+        """按 ``hash + 尺寸`` 查封面, 返回 ``(封面图, 图片实际尺寸)``。
+
+        选择顺序: 先看**等于**请求尺寸的, 再看**大于**请求尺寸的最小者;
+        都没有时, 只有存在“最大封面”(_full) 才回退用它, 否则返回 None ——
+        此时由基类模板方法进入 ``from_web``, 按请求尺寸联网取图。
+        """
         self._ensure_index()
         entries = self._index.get(music_hash)
         if not entries:
@@ -264,8 +348,16 @@ class MusicCache:
         if size == FULL_COVER_SIZE:
             picked = entries[-1]
         else:
-            picked = next(((s, n) for s, n in entries if s >= size), entries[-1])
-        path, _actual = join(self.cover_dir, picked[1]), picked[0]
+            picked = next((entry for entry in entries if entry[0] == size), None) \
+                or next((entry for entry in entries if entry[0] != FULL_SLOT and entry[0] > size), None)
+            if picked is None:
+                # 没有等于/大于请求尺寸的: 只有存在“最大封面”(_full) 时才回退用它;
+                # 否则返回 None, 交给基类模板方法去联网按请求尺寸取图。
+                picked = entries[-1] if entries[-1][0] == FULL_SLOT else None
+            if picked is None:
+                return None
+        _marker, actual, name = picked
+        path = join(self.cover_dir, name)
         try:
             with Image.open(path) as image:
                 image.load()
@@ -273,34 +365,36 @@ class MusicCache:
         except OSError as e:
             logger.warning(f"读取封面缓存失败: {path} -> {e}")
             return None
-        if size != FULL_COVER_SIZE and max(cover.size) > size:
-            cover.thumbnail((size, size))
-        return cover
+        return cover, (actual or max(cover.size))
 
     def save_cover(self, cover: Image.Image, music_hash: int, size: int, title: str = "",
-                   artist: str = "") -> int:
-        """把封面按 ``{歌曲名} - {作者}_{hash}_{尺寸}`` 存进缓存目录, 返回落盘的标记尺寸。
+                   artist: str = "") -> int | None:
+        """把封面按 ``{歌曲名} - {作者}_{hash}_{尺寸}`` 存进缓存目录, 返回文件名里的尺寸标记。
 
-        ``size`` 为 ``FULL_COVER_SIZE`` 时表示“这是最大封面”, 文件名里用``图片真实尺寸``,
-        便于日后按尺寸选取; 返回值即该标记尺寸。
+        ``size`` 为 ``FULL_COVER_SIZE`` 表示“这是最大封面”: 文件名里的尺寸部分写 ``_full``,
+        返回 ``None`` 作为标记; 其余情况写请求尺寸并返回该尺寸。
         """
         makedirs(self.cover_dir, exist_ok=True)
-        slot = max(cover.size) if size == FULL_COVER_SIZE else int(size)
+        # marker 是文件名里尺寸段的字面文本: 数字, 或 FULL_SLOT ("_full" 自带前导下划线)
+        marker = FULL_SLOT if size == FULL_COVER_SIZE else str(int(size))
+        if size != FULL_COVER_SIZE:
+            # 按标记尺寸等比缩小后再落盘, 保证文件名里的尺寸就是图片真实尺寸
+            if max(cover.size) > size:
+                cover = cover.copy()
+                cover.thumbnail((size, size))
         format_ = self.save_format or ("PNG" if getattr(cover, "format", None) == "PNG" else "JPEG")
         ext = "png" if format_ == "PNG" else "jpg"
         prefix = f"{sanitize_filename(title)} - {sanitize_filename(artist)}" if (title or artist) else ""
-        name = f"{prefix}_{music_hash:x}_{slot}.{ext}" if prefix else f"{music_hash:x}_{slot}.{ext}"
+        tail = f"{music_hash:x}{marker if marker.startswith('_') else '_' + marker}"
+        name = f"{prefix}_{tail}.{ext}" if prefix else f"{tail}.{ext}"
         path = join(self.cover_dir, name)
         if format_ == "PNG":
             cover.convert("RGBA").save(path, "PNG")
         else:
             cover.convert("RGB").save(path, "JPEG", quality=self.save_quality)
-        self._ensure_index()
-        entries = [entry for entry in self._index.get(music_hash, []) if entry[0] != slot]
-        entries.append((slot, name))
-        entries.sort()
-        self._index[music_hash] = entries
-        return slot
+        # 落盘后直接按目录重建索引, 保证索引与磁盘一致 (不做增量拼装)
+        self.reload_index()
+        return None if marker == FULL_SLOT else int(size)
 
     # ------------------------------------------------------------------ 清理
     def clear(self) -> Generator[tuple[int, int, str], None, None]:
@@ -344,7 +438,7 @@ class MusicBackend(ABC):
 
     基类负责统一流程: ``get_music_info`` 依次尝试
     ``from_cache()`` -> ``from_web()`` -> ``from_raw_smtc()``,
-    某一步返回 None 就进入下一步; ``force_refresh=True`` 时跳过 ``from_cache``。
+    某一步返回 None (或抛异常) 就进入下一步; ``force_refresh=True`` 时跳过 ``from_cache``。
 
     派生类只需实现:
       * ``from_cache`` / ``from_web`` / ``from_raw_smtc`` —— 各自的业务;
@@ -354,6 +448,8 @@ class MusicBackend(ABC):
 
     platform_id: str = "unknown"
     cache_name: str = "unknown"
+    # 源会话匹配标记 (source_app_user_model_id 小写子串), 由派生类声明
+    source_markers: tuple[str, ...] = ()
     # 封面落盘格式: None 表示保持图片原有格式
     cover_format: SaveFormat = None
     cover_quality: int = 90
