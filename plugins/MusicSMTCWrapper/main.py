@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """MusicSMTCWrapper (音乐封面高清化) 插件入口。
 
-Plugin 只负责流程编排:
-    读取配置中的歌曲平台 / 识别源会话属于哪个平台
-      → 查找 SMTC 对应会话, 获取 SessionMediaProperties   (SMTCHost)
-      → 交给对应 MusicBackend.get_music_info() 处理        (smtc_backend.*)
-      → 拿到封面后交给 SMTCHost 更新到插件的 SMTC 会话      (SMTCHost)
+Plugin 只负责流程编排, 并同时持有两个 SMTC 侧组件:
+  * `SourceManager` (smtc_host.py) —— 源平台会话: 发现/筛选/事件注册注销/读取信息, 单线程
+  * `SMTCHost`     (smtc_host.py) —— 插件自建的 SMTC 会话
 
-SMTC 会话语义在 smtc_host.SMTCHost；封面搜索/缓存/平台差异在 smtc_backend\\ 下。
+流程: 读取配置中的歌曲平台 / 识别源会话属于哪个平台
+  → SourceManager 提供源会话的 SessionMediaProperties
+  → 交给对应 MusicBackend.get_music_info() 处理        (smtc_backend.*)
+  → 拿到封面后交给 SMTCHost 更新到插件的 SMTC 会话
+两个组件之间只通过回调联系, 回调在插件启动时一次性设置。
 新增音乐平台后端: 在 smtc_backend\\ 下新增模块, 实现 MusicBackend 子类 + 声明
 platform_id / cache_name / source_markers, 然后在 _build_backends() 里注册一行即可。
 """
@@ -42,7 +44,7 @@ from smtc_backend.base import (
     StandardMusicInfo,
     plugin_logger,
 )
-from smtc_host import SMTCHost
+from smtc_host import SMTCHost, SourceManager
 
 name = "高清酷狗封面"
 logger = plugin_logger
@@ -125,17 +127,21 @@ class Plugin(BasePlugin):
         self.config.load()
 
         self.action_queue: Queue[Action | MediaPlaybackStatus] = Queue()
+        self.result_queue: Queue[int] = Queue()
         self.action_thread = Thread(target=self.action_thread_func, daemon=True)
 
         self.smtc_host = SMTCHost()
+        self.source_manager = SourceManager()
+        # 回调在启动时一次性设置: 两个管理器之间只通过回调联系
+        self.source_manager.on_changed = self.on_source_changed
+        self.source_manager.on_updated = self.on_source_update
+        self.source_manager.on_timeline_changed = self.on_timeline_update
+        self.source_manager.on_plugin_playback = self.smtc_host.set_playback_status
+        self.smtc_host.set_button_callback(self.on_button_press)
+
         self.backends = _build_backends(*self._cover_save_policy())
 
         self.last_song = None
-
-        self.sessions_changed_token = None
-        self.source_changed_token = None
-        self.timeline_changed_token = None
-        self.has_reg_event = False
 
         self.music_reporter = MusicReportManager()
 
@@ -174,8 +180,9 @@ class Plugin(BasePlugin):
             return 480
 
     def _sync_config(self):
-        """配置同步入口: 配置 -> SMTCHost / 各后端"""
-        self.smtc_host.bind(self.config)
+        """配置同步入口: 配置 -> SourceManager / SMTCHost / 各后端"""
+        self.source_manager.bind(self.config)
+        self.smtc_host.bind(self.config, self.source_manager.source_id)
         save_format, save_quality = self._cover_save_policy()
         for backend in self.backends.values():
             backend.update_config(save_format, save_quality)
@@ -191,12 +198,11 @@ class Plugin(BasePlugin):
         self.smtc_host.create()
         self._sync_config()
         self.default()
-        logger.info("注册事件")
-        self.smtc_host.register_button_handler(self.on_button_press)
-        self.on_session_changed()
-        if not self.has_reg_event:
-            self.sessions_changed_token = self.smtc_host.sessions.add_sessions_changed(self.on_session_changed)
-            self.has_reg_event = True
+        logger.info("启动源会话管理器 (注册会话列表事件 + 单线程 worker)")
+        # SourceManager 自己负责源会话事件的注册/注销, 以及所有源会话操作的单线程化
+        self.source_manager.bind(self.config)
+        self.source_manager.start()
+        self.update_source_session()
 
     def stop(self):
         self.music_reporter.flush()
@@ -206,15 +212,8 @@ class Plugin(BasePlugin):
 
     def stop_raw(self):
         self.save_cache()
-        logger.info("移除事件")
-        if self.smtc_host.source is not None:
-            self.smtc_host.source.remove_playback_info_changed(self.source_changed_token)
-            self.smtc_host.source.remove_timeline_properties_changed(self.timeline_changed_token)
-            self.smtc_host.sessions.remove_sessions_changed(self.sessions_changed_token)
-            self.has_reg_event = False
-        self.sessions_changed_token = None
-        self.source_changed_token = None
-        self.timeline_changed_token = None
+        logger.info("停止源会话管理器 (注销事件 + 停 worker)")
+        self.source_manager.stop()
         logger.info("删除SMTC对象")
         self.smtc_host.destroy()
         self.last_song = None
@@ -232,17 +231,20 @@ class Plugin(BasePlugin):
                 self.music_reporter.flush()
 
             if old_config["music_platform"] != new_config["music_platform"]:
-                self.update_source_session()
+                # 歌曲平台变了: 让 SourceManager 注销旧会话事件并按新平台重新筛选
+                logger.info(f"歌曲平台变更: {old_config['music_platform']} -> {new_config['music_platform']}")
+                self.source_manager.switch_platform(self.platform_id)
+                self.smtc_host.bind(self.config, self.source_manager.source_id)
+                self.last_song = None
+                self.on_source_update(force_update=True)
 
     def action_thread_func(self):
-        while self.action_queue.empty():
+        while True:
             action = self.action_queue.get()
             if action == Action.START:
                 self.start_raw()
             elif action == Action.END:
                 self.stop_raw()
-            elif action == Action.REFRESH_INFO:
-                self.on_source_update(force_update=True)
             elif isinstance(action, MediaPlaybackStatus):
                 self.smtc_host.set_playback_status(action)
 
@@ -270,31 +272,34 @@ class Plugin(BasePlugin):
             dialog.Destroy()
 
     # ================================================================== 源会话事件
-    def on_session_changed(self, *_):
+    # 以下三个回调由 SourceManager 调用 (在它的 worker 线程 / WinRT 事件线程上),
+    # 回调本身只做编排, 所有源会话的读取都通过 SourceManager (它内部再串行到唯一 worker)。
+    def on_source_changed(self):
+        """会话列表发生变化: 当前源会话还有效就什么都不做, 否则断开重找"""
         if self.check_source_valid():
             return
         logger.info("SMTC会话已失效")
-        # 如果SMTC会话已失效，则尝试重新查找SMTC会话，如果没有则不管
-        self.update_source_session()
+        self.update_source_session(update_or_destroyed=False)
 
-    def update_source_session(self):
-        if self.smtc_host.has_source:
-            self.smtc_host.release_source()
-            self.source_changed_token = self.timeline_changed_token = self.last_song = None
+    def update_source_session(self, update_or_destroyed: bool = False):
+        """重新筛选源会话; update_or_destroyed=True 时先主动断开当前的"""
+        logger.debug(f"更新SMTC源: {update_or_destroyed}")
+        if self.source_manager.has_source:
+            self.source_manager.release()
+            self.last_song = None
+            self.smtc_host.bind(self.config, None)
             self.smtc_host.set_playback_status(MediaPlaybackStatus.STOPPED)
             self.default()
-        try:
-            session = self.smtc_host.find_source()
+        if self.source_manager.find():
+            self.smtc_host.bind(self.config, self.source_manager.source_id)
             if self.config.allways_playing:
                 self.smtc_host.set_playback_status(MediaPlaybackStatus.PLAYING)
-            self.source_changed_token = session.add_playback_info_changed(self.on_source_update)
-            self.timeline_changed_token = session.add_timeline_properties_changed(self.on_timeline_update)
             self.on_source_update()
-        except RuntimeError:
-            pass
+        else:
+            logger.info("暂时没有找到目标SMTC")
 
     def check_source_valid(self) -> bool:
-        return self.smtc_host.check_source_valid()
+        return self.source_manager.valid()
 
     def default(self):
         if self.smtc_host.smtc is None:
@@ -306,7 +311,9 @@ class Plugin(BasePlugin):
     def on_timeline_update(self, *_):  # 当歌曲进度条更新时
         if not self.check_source_valid():
             return
-        self.smtc_host.update_timeline()
+        # 只有萌音需要把进度条透传给插件会话
+        if "moekoe" in (self.source_manager.source_id or "").lower():
+            self.smtc_host.update_timeline(self.source_manager.timeline_properties())
 
     def on_source_update(self, *_, force_update: bool = False):
         if not self.check_source_valid():
@@ -314,11 +321,13 @@ class Plugin(BasePlugin):
                 self.default()
             return
 
-        info = self.smtc_host.get_source_info()
+        info = self.source_manager.info()
+        if info is None:
+            return
         song_id = f"{info.title}{info.artist}{info.album_title}{info.album_artist}"
 
         # 同步播放状态
-        status: MediaPlaybackStatus = self.smtc_host.get_source_status()
+        status: MediaPlaybackStatus = self.source_manager.status()
         if status != self.smtc_host.playback_status and not self.config.allways_playing:
             self.smtc_host.set_playback_status(status)
 
@@ -329,7 +338,7 @@ class Plugin(BasePlugin):
             # logger.debug(f"歌曲信息更新, 歌名相同, 不更新, {str([status])[1:-1]}, {song_id}")
             return
         # 后端按源会话应用 id 选 (切换平台/软件时自动切换), 认不出来才用配置里选的平台
-        backend = self.get_backend(self.smtc_host.source_app_id)
+        backend = self.get_backend(self.source_manager.source_id)
         if backend is None:
             logger.error(f"找不到平台 [{self.platform_id}] 对应的后端")
             return
@@ -369,9 +378,10 @@ class Plugin(BasePlugin):
 
     # ================================================================== SMTC 按钮
     def on_button_press(self, _, args):
+        """插件会话按钮 -> 交给 SourceManager (在它的 worker 线程上操作源会话)"""
         if not self.check_source_valid():
             return
-        self.smtc_host.handle_button(args)
+        self.source_manager.handle_button(args)
 
     # ================================================================== 快捷方式
     @staticmethod

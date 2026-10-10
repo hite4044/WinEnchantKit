@@ -2,12 +2,14 @@
 
 # MusicSMTCWrapper 重构说明（原位置 → 新位置）
 
-重构目标：把原本集中在 `main.py::Plugin` 的职责拆成「编排 / SMTC 宿主 / 后端模板 / 通用缓存 / 音乐报告」五层，后端采用**模板方法模式**。
+重构目标：把原本集中在 `main.py::Plugin` 的职责拆成「编排 / 源会话管理 / SMTC 宿主 / 后端模板 / 通用缓存 / 音乐报告」六层，后端采用**模板方法模式**。
 
 ```
-Plugin (main.py)                     只做流程编排 + 管理各 MusicBackend 子类
-  ├─ SMTCHost (smtc_host.py)         自建 SMTC 会话 + 源会话的全部细节
-  ├─ smtc_backend/base.py::MusicBackend  基类模板方法
+Plugin (main.py)                        只做流程编排 + 管理各 MusicBackend 子类
+  ├─ SourceManager (smtc_host.py)       源平台会话: 发现 / 筛选 / 事件注册注销 / 读信息 / 转发按钮
+  │                                     **所有源会话 SMTC 操作严格跑在同一个 worker 线程**
+  ├─ SMTCHost (smtc_host.py)            插件自建的 SMTC 会话 (MediaPlayer + DisplayUpdater)
+  ├─ smtc_backend/base.py::MusicBackend 基类模板方法
   │      get_music_info(props, size) 统一流程:
   │          from_cache(music_info, size, props)      ← 本地缓存
   │        -> from_web(music_info, size, props)       ← 联网搜索下载
@@ -19,18 +21,45 @@ Plugin (main.py)                     只做流程编排 + 管理各 MusicBackend
   └─ MusicReportManager (music_reporter.py)   音乐报告（从 Plugin 剥离）
 ```
 
+## 源会话管理 (SourceManager) 与插件会话 (SMTCHost)
+
+两者由 `Plugin` 同时持有, 互相之间**只通过回调**联系; 回调在插件启动时一次性设置:
+
+| 回调 | 方向 | 作用 |
+|---|---|---|
+| `SourceManager.on_changed` | 源会话 -> Plugin | 会话列表变化: 当前源仍有效就忽略, 否则断开重找 |
+| `SourceManager.on_updated` | 源会话 -> Plugin | 源会话歌曲信息有更新 -> 走一遍刷新流程 |
+| `SourceManager.on_timeline_changed` | 源会话 -> Plugin | 进度条更新 (仅萌音透传) |
+| `SourceManager.on_plugin_playback` | 源会话 -> SMTCHost | 按钮/兜底需要改插件会话播放状态 |
+| `SMTCHost.button_handler` | 插件会话 -> SourceManager | 用户按按钮 -> `SourceManager.handle_button()` |
+
+### 单线程约束
+`SourceManager` 内部是一个「命令队列 + 唯一 worker 线程」: 所有源会话操作
+(`find` / `valid` / `info` / `status` / `timeline_properties` / `release` / `switch_platform` /
+按钮转发) 都投递到该线程串行执行; WinRT 事件回调也只负责投递, 不直接碰会话。
+外部调用 `find()` 等会阻塞等待结果 (带 5s 超时, 防止 UI 线程被卡死), 按钮转发则是异步投递。
+各命令之间不允许互相投递 (会把命令投给自己造成死锁) —— 例如 `_cmd_switch_platform` 只会调用内部
+的 `_cmd_find()`, 不会调用公开的 `find()`。
+
+### 参数刷新时机
+| 时机 | 处理 |
+|---|---|
+| 插件启动 | `source_manager.bind(config)` -> `start()` (注册会话列表事件 + 起 worker) -> `update_source_session()` 筛选并接管; `smtc_host.bind(config, source_id)` |
+| 源会话变化 | `on_changed`: 无效则 `source_manager.release()` + 重找; 找到后立刻 `smtc_host.bind(config, source_id)` 刷新空格修正 |
+| 修改「歌曲平台」 | `update_config` -> `source_manager.switch_platform(新平台)` (注销旧会话事件 + 重新筛选) -> `smtc_host.bind(config, source_id)` -> 刷新信息; 后续所有源会话读取都走新平台 |
+| 插件停止 | `source_manager.stop()` (注销全部事件 + 停 worker) 与 `smtc_host.destroy()` |
+
 ## 目录结构
 
 ```
 MusicSMTCWrapper/
 ├── main.py                 Plugin: 配置 / 后端注册与路由 / 源会话编排 / 缓存按钮 / 快捷方式
-├── smtc_host.py            SMTCHost: 自建 SMTC 会话 + 源会话
+├── smtc_host.py            SourceManager (源会话, 单线程) + SMTCHost (插件自建会话)
 ├── music_reporter.py       MusicReportManager (+ Music/MusicPoint/MusicReporter)
 ├── smtc_backend/           后端包 (由 main.py 把插件根目录加入 sys.path 后按包名导入)
 │   ├── base.py             契约层: StandardMusicInfo / MusicCache / MusicBackend / 工具
 │   ├── kugou.py            酷狗后端
 │   └── netease.py          网易云后端
-├── backend/                兼容薄层 (base.py / base_backend.py，只再导出，运行时不依赖)
 └── REFACTOR_NOTES.md
 ```
 
@@ -90,17 +119,19 @@ MusicSMTCWrapper/
 | 原位置 | 新位置 |
 |---|---|
 | `start_raw` 里建 SMTC / 取 SessionManager；`backend.create_smtc` | `SMTCHost.create()` |
-| `stop_raw` 里对象置空 / 解绑 | `SMTCHost.destroy()` / `release_source()` |
+| `stop_raw` 里对象置空 / 解绑 | `SMTCHost.destroy()` / `SourceManager.release()` |
 | `update_smtc_info` | `SMTCHost.display()`（含 `app_media_id`） |
 | `default` 的写入部分 | `SMTCHost.display_default()` |
-| `on_timeline_update`、`is_moe_koe_music` | `SMTCHost.update_timeline()`、`source_start_fix` |
-| `on_button_press` 的会话操作 | `SMTCHost.handle_button()` |
-| `check_source_valid`、`get_kugou_info`、播放状态同步 | `SMTCHost.check_source_valid()` / `get_source_info()` / `get_source_status()` |
-| `on_session_changed` 里的 `get_kugou_session` | `SMTCHost.find_source()` |
+| `on_timeline_update`、`is_moe_koe_music` | `SourceManager.timeline_properties()` + `SMTCHost.update_timeline()`、`SMTCHost.source_start_fix` |
+| `on_button_press` 的会话操作 | `SourceManager.handle_button()`（投递到源会话 worker 线程） |
+| `check_source_valid`、`get_kugou_info`、播放状态同步 | `SourceManager.valid()` / `info()` / `status()` |
+| `on_session_changed` 里的 `get_kugou_session` | `SourceManager.find()`（按 `PLATFORM_SOURCES` 筛选, 单线程） |
+| 源会话事件的注册 / 注销（`add/remove_playback_info_changed` 等） | `SourceManager._register_session_events()` / `_unregister_session_events()` / `_register_manager_events()` / `_unregister_manager_events()` |
+| `update_source_session`（断旧找新） | `Plugin.update_source_session()` + `SourceManager.release()` / `find()` |
 | `load_cover`（歌名清洗 + 搜索 + 封面 URL + 缓存键） | `KugouMusicBackend.from_web()` + `clean_music_title` / `cover_url` / `music_hash_for` |
 | `update_info`（下载 / 落盘 / 拼路径 / 读本地图 / 转流引用） | `from_web()`（下载+写缓存）、`MusicCache.find_cover()`（读缓存）、`SMTCHost._stream_reference()`（转流） |
 | `load_cache` / `save_cache` / `remove_cache`（文件部分与进度） | `MusicBackend.load_cache()` / `save_cache()` / `clear_cache()`（进度 Generator） |
-| `update_config` 中配置分发 | `Plugin._sync_config()` → `SMTCHost.bind()` + `MusicBackend.update_config()` |
+| `update_config` 中配置分发 | `Plugin._sync_config()` → `SourceManager.bind()` + `SMTCHost.bind()` + `MusicBackend.update_config()`；平台变更另走 `SourceManager.switch_platform()` |
 | 音乐报告：`_handle_music_report` + `last_reporter_*` + `create_report` + `stop` 的 finish/save | `MusicReportManager.handle()` / `generate_report()` / `flush()` / `save()` |
 | `main.py::MusicData` | 删除，由 `StandardMusicInfo.cover`（`PIL.Image.Image`）取代 |
 
@@ -141,7 +172,11 @@ MusicSMTCWrapper/
 | 网易云封面尺寸参数 | 集成 I19–I21；端到端 E34 |
 | `Plugin` 不含实现细节 | 集成 I22/I23（逐词扫描 `main.py`） |
 | 空 `album_title`/`album_artist`/`thumbnail` 不崩溃 | 契约 D3；端到端 E43–E46 |
-| 配置同步（含平台切换） | 集成 I33–I39 |
+| 配置同步（含平台切换） | 集成 I33–I39；端到端 E52–E54 |
+| 源会话管理独立成 `SourceManager` | 源会话自验 S1–S40（发现/筛选/事件守恒/释放/停止） |
+| **源会话操作严格单线程** | 源会话自验 S12–S14（所有操作记录的线程名唯一且为 worker）、S17 |
+| 两个组件只通过回调联系, 回调启动时设置 | 源会话自验 S45–S50 |
+| 切平台 / 启停时参数刷新 | 源会话自验 S27–S35、S36–S40；集成 I34b |
 | 网易云真实链路（联网冒烟） | `STOP - Labirhin` → 专辑 STOP / 时长 370.546s / 请求 240 落盘 `_240.jpg`；`MAGENTA POTION - EmoCosine` 同；第二次请求 130px 命中本地缓存缩放、联网 0 次 |
 
 ## 已知取舍
@@ -152,4 +187,7 @@ MusicSMTCWrapper/
 - 缩略图统一转成 PIL 图片（`SMTCHost` 用 `InMemoryRandomAccessStream` 转回流引用）。
 - `music_hash` 用 sha256 截断 64 位（`make_music_hash`），并按平台加前缀（`"kugou"` / `"netease"`）：`str.__hash__` 跨进程不稳定，且两平台不会互相撞 key。
 - 网易云搜索对同曲多版本取“歌名完全一致者”，否则取第一个歌手匹配项；匹配依赖 SMTC 提供的 title/artist。
+- 源会话的“单线程”只约束 `SourceManager` 内部；插件自建会话（`SMTCHost`）与后端缓存仍在原来的线程上跑，
+  但改动插件会话播放状态只经由 `on_plugin_playback` 回调。
+- `SourceManager` 的命令等待带 5s 超时：worker 万一卡住也只丢一次操作并记错误日志，不会把 UI 线程一起卡死。
 - 本插件不再从 `plugins.HDKugouCover` 导入任何东西（`music_reporter.py` 用自身的 `Music`/`MusicReporter`）。

@@ -243,7 +243,7 @@ class KugouMusicBackend(MusicBackend):
         fetch_size = size if size != FULL_COVER_SIZE and not self.music_cache.has_cover(music_hash) \
             else FULL_COVER_SIZE
         try:
-            resp = requests.get(cover_url(template, fetch_size), headers=HEADERS, data=None)
+            resp = requests.get(cover_url(template, fetch_size), headers=HEADERS, data=None, timeout=5)
             with Image.open(BytesIO(resp.content)) as image:
                 image.load()
                 cover = image.copy()

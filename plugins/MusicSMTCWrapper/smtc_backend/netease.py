@@ -194,6 +194,7 @@ class NeteaseMusicBackend(MusicBackend):
             logger.warning(f"本地缓存封面加载失败: {music_info.title} - {music_info.artist}")
             return None
         cover, slot = found
+        music_info.album_title = "" # 将此字段置空以防止部分动态壁纸将专辑名添加至歌手后部
         music_info.cover = prepare_cover(cover, size)
         music_info.cover_slot = slot
         music_info.has_cover = True
@@ -221,7 +222,7 @@ class NeteaseMusicBackend(MusicBackend):
         fetch_size = size if size != FULL_COVER_SIZE and not self.music_cache.has_cover(music_hash) \
             else FULL_COVER_SIZE
         try:
-            resp = requests.get(cover_url(pic_url, fetch_size), headers=WEB_HEADERS, timeout=15)
+            resp = requests.get(cover_url(pic_url, fetch_size), headers=WEB_HEADERS, timeout=5)
             resp.raise_for_status()
             with Image.open(BytesIO(resp.content)) as image:
                 image.load()
