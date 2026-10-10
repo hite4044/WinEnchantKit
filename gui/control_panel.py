@@ -240,7 +240,7 @@ class ControlPanel(wx.Frame):
                 plugin_info = json.load(f)
             if not self.inst_plugin_req_gui(plugin_info):
                 return False
-            path.append(plugin_dir)
+            path.insert(0, plugin_dir)
             plugin_logger = get_plugin_logger(plugin_info["id"], plugin_info["name"])
             module = import_module(f"plugins.{basename(plugin_dir)}.{plugin_info['main_file'].split('.')[0]}")
             main_class: BasePlugin = getattr(module, plugin_info["main_class"])()
@@ -461,11 +461,8 @@ class ControlPanel(wx.Frame):
 
     def show_or_hide(self):
         if self.IsShown():
-            self.create_stray_icon()
-            self.stray_icon.run_detached()
             self.Hide()
         else:
-            self.stray_icon.stop()
             self.Show()
 
     def on_exit_gui(self, *_):
