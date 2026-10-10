@@ -39,6 +39,7 @@ def right_corner_border_style(hwnd: int, enable_round_corner: bool, corner_type:
 
 def hide_background_window(main_kugou: int):
     """隐藏酷狗的背景窗口, 如果把酷狗窗口放在白色背景下，会发现边角有一层白色窗口"""
+    return
     from time import sleep
     sleep(5)
     windows = []
