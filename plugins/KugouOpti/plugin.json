@@ -1,11 +1,11 @@
 {
-  "id": "no_kugou_ad",
-  "name": "酷狗无广告",
+  "id": "kugou_opti",
+  "name": "酷狗优化",
   "author": "hite404",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "main_file": "main.py",
   "main_class": "Plugin",
-  "desc": "检测元素并隐藏酷狗的广告-待完善",
+  "desc": "稍微优化酷狗音乐的界面元素",
   "requirements": {
     "pywin32": "",
     "uiautomation": ""
