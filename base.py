@@ -31,6 +31,10 @@ class ConfigParam:
         except ValueError:
             return None
 
+    def set_help(self, help_string: str):
+        self.help_string = help_string
+        return self
+
 
 class TipParam(ConfigParam):
     def __init__(self, desc: str):
