@@ -1,449 +1,691 @@
 # -*- coding: utf-8 -*-
 """MusicSMTCWrapper (音乐封面高清化) 插件入口。
 
-Plugin 只负责流程编排, 并同时持有两个 SMTC 侧组件:
-  * `SourceManager` (smtc_host.py) —— 源平台会话: 发现/筛选/事件注册注销/读取信息, 单线程
-  * `SMTCHost`     (smtc_host.py) —— 插件自建的 SMTC 会话
+职责 (只做编排, 具体实现分散在各自模块):
 
-流程: 读取配置中的歌曲平台 / 识别源会话属于哪个平台
-  → SourceManager 提供源会话的 SessionMediaProperties
-  → 交给对应 MusicBackend.get_music_info() 处理        (smtc_backend.*)
-  → 拿到封面后交给 SMTCHost 更新到插件的 SMTC 会话
-两个组件之间只通过回调联系, 回调在插件启动时一次性设置。
-新增音乐平台后端: 在 smtc_backend\\ 下新增模块, 实现 MusicBackend 子类 + 声明
-platform_id / cache_name / source_markers, 然后在 _build_backends() 里注册一行即可。
+* ``PluginConfig``   —— 插件配置 (所有配置项与 help_string 都在这里)
+* ``SourceSMTC``     —— 源平台官方 SMTC 会话的发现/读取/事件 (smtc_source.py, 单线程)
+* ``SMTCHost``       —— 插件托管的 SMTC 会话 (smtc_host.py, 单线程, 可自托管进度)
+* ``BaseMusicBackend`` 及各平台后端 —— 歌曲搜索 / 封面下载 / 本地缓存 (platform/)
+
+信息流:
+    SourceSMTC.snapshot()  →  平台后端 fetch() (缓存 → 联网 → 封面相似度)
+                           →  字段指向映射  →  SMTCHost.update()
+
+导入约定: 本插件作为 namespace 包 ``plugins.MusicSMTCWrapper`` 被加载, 包内一律使用相对导入。
+插件目录里的 ``platform/`` 与标准库 ``platform`` 同名, 因此程序一启动就把插件目录从
+``sys.path`` 移除, 避免标准库被遮蔽; 相对导入不依赖 ``sys.path``, 不受影响。
 """
 import os
 import sys
 
-# 插件加载器只把插件根目录放进 sys.path, 而后端包在本目录的 smtc_backend/ 下, 这里补一次。
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
-if _PLUGIN_DIR not in sys.path:
-    sys.path.insert(0, _PLUGIN_DIR)
 
-import winreg
-from os.path import expandvars, join
-from queue import Queue
-from threading import Thread
+# 插件加载器把插件目录插入过 sys.path[0] (可能是相对路径, 例如 "plugins\MusicSMTCWrapper"):
+# 这里立刻移除, 防止 plugin/platform/ 遮蔽标准库 platform。比较时两边都做绝对化 + 大小写归一。
+_TARGET_DIR = os.path.normcase(os.path.normpath(os.path.abspath(_PLUGIN_DIR)))
+for _entry in list(sys.path):
+    try:
+        _entry_path = os.path.normcase(os.path.normpath(os.path.abspath(_entry or os.getcwd())))
+    except (TypeError, ValueError, OSError):
+        continue
+    if _entry_path == _TARGET_DIR:
+        try:
+            sys.path.remove(_entry)
+        except ValueError:
+            pass
+
+import logging
+from io import BytesIO
+from os import makedirs
+from os.path import dirname, isfile, join, expandvars
+from queue import Empty, Queue
+from threading import Event, Thread
+from time import sleep
 
 import pylnk3
 import wx
 import win32con as con
+from PIL import Image
 from win32comext.shell.shell import ShellExecuteEx
-from winsdk.windows.media import MediaPlaybackStatus
-from winsdk.windows.media.control import (
-    GlobalSystemMediaTransportControlsSessionMediaProperties as SessionMediaProperties,
+
+from base import *  # noqa: F403 - WinEnchantKit 的参数类型 (ModuleConfigPlus / ChoiceParamPlus / ...)
+
+from . import music_base
+from .music_base import (
+    FIELD_ALBUM_ARTIST,
+    FIELD_ALBUM_TITLE,
+    FIELD_ARTIST,
+    FIELD_CHOICES,
+    FIELD_TITLE,
+    LOGGER_NAME,
+    MusicInfo,
+    normalize_field,
+)
+from .platform import kugou, netease, qqmusic
+from .platform.base_backend import DEFAULT_COVER_SIZE, FULL_COVER_SIZE, BaseMusicBackend
+from .smtc_host import SMTCHost
+from .smtc_source import (
+    PLATFORM_AUTO,
+    PLATFORM_KUGOU,
+    PLATFORM_NETEASE,
+    PLATFORM_QQ,
+    SourceSMTC,
+    SourceSnapshot,
 )
 
-from base import *
-from music_reporter import MusicReportManager
-from smtc_backend import kugou, netease
-from smtc_backend.base import (
-    FULL_COVER_SIZE,
-    MusicBackend,
-    StandardMusicInfo,
-    plugin_logger,
-)
-from smtc_host import SMTCHost, SourceManager
+name = "音乐封面高清化"
+logger = logging.getLogger(LOGGER_NAME)
+logger.setLevel(logging.DEBUG)
 
-name = "高清酷狗封面"
-logger = plugin_logger
+# 配置界面 / 消息框标题
+WINDOW_TITLE = "WinEnchantKit - 音乐封面高清化"
 
+# 无源会话时显示的默认信息 (与旧插件默认值一致)
+DEFAULT_MUSIC = MusicInfo("Title", "Artist", "Album Title", "Album Artist", 0.0)
 
-class CoverCacheFmt(int):
-    JPG = 0
-    PNG = 1
-    RAW_FORMAT = 2
+# 刷新请求类型
+_REFRESH_FULL = "full"
+_REFRESH_TIMELINE = "timeline"
+# 请求合并前的防抖时间 (秒): 吸收短时间内的连续事件
+REFRESH_DEBOUNCE = 0.15
+# 生命周期 / 源接口的等待超时
+LIFECYCLE_TIMEOUT = 30.0
+
+# 源 SMTC 平台选项
+SOURCE_PLATFORM_CHOICES = {
+    PLATFORM_AUTO: "自动",
+    PLATFORM_KUGOU: "酷狗/MoeKoeMusic",
+    PLATFORM_NETEASE: "网易云",
+    PLATFORM_QQ: "QQ音乐",
+}
+# 音乐搜索平台选项
+SEARCH_PLATFORM_CHOICES = {
+    PLATFORM_AUTO: "自动决定",
+    PLATFORM_KUGOU: "优先酷狗音乐",
+    PLATFORM_NETEASE: "优先网易云",
+    PLATFORM_QQ: "优先QQ音乐",
+}
+# 封面尺寸选项 (SMTC 最终使用的封面大小)
+COVER_SIZE_CHOICES = {
+    150: "150x150",
+    240: "240x240",
+    400: "400x400",
+    480: "480x480",
+    640: "640x640",
+    800: "800x800",
+}
+# 封面缓存格式
+COVER_FORMAT_CHOICES = {
+    "raw": "原文件",
+    "jpeg": "JPEG",
+    "png": "PNG",
+}
 
 
 class PluginConfig(ModuleConfigPlus):
+    """插件配置。
+
+    help_string 是给用户/AI 看懂参数含义的说明; 所有会修改行为、需要重启或不重启生效的
+    逻辑都在 ``Plugin.update_config`` 里分发。
+    """
+
     def __init__(self):
         super().__init__()
-        self.tip: TipParam = TipParam("插件启用后如果仍然不显示高清封面, 请在快速设置面板(开WIFI的地方)")
-        self.tip2: TipParam = TipParam("箭头按钮切换SMTC会话, 直到找到那个专辑名前多了一个空格的SMTC会话")
-        self.music_platform: ChoiceParamPlus | str = ChoiceParamPlus("kugou",
-                                                                     {"kugou": "Kugou", "netease": "网易云"},
-                                                                     "歌曲平台")
-        self.cover_size: ChoiceParam | str = ChoiceParam("480",
-                                                         ["480", "400", "240", "150", "120", "100", "64"],
-                                                         "封面尺寸")
-        self.use_max_size: BoolParam | bool = BoolParam(False, "使用最大封面尺寸")
-        self.allways_playing: BoolParam | bool = BoolParam(False, "永不暂停SMTC (暂停时总是切换会话时用)")
-        self.exchange_title2album: BoolParam | bool = BoolParam(False, "专辑名与作者名互换")
-        self.default_title: StringParam | str = StringParam("Title", "默认标题")
-        self.default_artist: StringParam | str = StringParam("Artist", "默认艺术家")
-        self.default_album_title: StringParam | str = StringParam("Album Title", "默认专辑名")
-        self.default_album_artist: StringParam | str = StringParam("Album Artist", "默认专辑艺术家")
-        self.cover_cache_quality: IntParam | int = IntParam(90, "封面缓存质量 (仅jpg) (1-100)")
-        self.cover_cache_format: ChoiceParamPlus | CoverCacheFmt = ChoiceParamPlus(CoverCacheFmt.JPG,
-                                                                                   {CoverCacheFmt.JPG: "JPG",
-                                                                                    CoverCacheFmt.PNG: "PNG",
-                                                                                    CoverCacheFmt.RAW_FORMAT: "原格式"
-                                                                                    }, "封面缓存格式")
-        self.refresh_info: ButtonParam = ButtonParam(desc="立即更新信息")
-        self.clear_cache: ButtonParam = ButtonParam(desc="清除封面url缓存")
-        self.enable_music_report: BoolParam | bool = BoolParam(False, "启用音乐报告")
-        self.create_music_report: ButtonParam = ButtonParam(desc="生成音乐报告")
-        self.install_kugou_lnk: ButtonParam = ButtonParam(
+        self.source_platform: ChoiceParamPlus | str = ChoiceParamPlus(
+            PLATFORM_AUTO, SOURCE_PLATFORM_CHOICES, "源SMTC平台"
+        ).set_help("控制歌曲信息从哪个SMTC会话获取。\n"
+                   "自动: 自动搜索并绑定下面可选项的SMTC会话, 除非绑定类型的SMTC会话失效, 否则不轻易切换类型")
+        self.search_platform: ChoiceParamPlus | str = ChoiceParamPlus(
+            PLATFORM_AUTO, SEARCH_PLATFORM_CHOICES, "音乐搜索平台"
+        ).set_help("控制从哪个平台搜索对应的歌曲信息。\n"
+                   "自动决定: 根据源SMTC平台的类型决定")
+        self.allow_cross_platform: BoolParam | bool = BoolParam(
+            True, "允许从不同平台搜索"
+        ).set_help("允许从定义除外的平台搜索出歌曲信息并使用 (相同平台搜不到时再试其他平台)")
+        self.use_cover_similarity: BoolParam | bool = BoolParam(
+            True, "通过封面相似度检测"
+        ).set_help("允许在搜索不出对应专辑时, 逐个下载搜索结果封面与源SMTC封面(150x150)做相似度比对, "
+                   "选出最相似的那张 ")
+        self.cover_size: ChoiceParamPlus | int = ChoiceParamPlus(
+            480, COVER_SIZE_CHOICES, "封面尺寸"
+        ).set_help("SMTC最终使用的封面大小")
+        self.use_max_cover: BoolParam | bool = BoolParam(
+            False, "使用最大封面"
+        ).set_help("勾选后, SMTC将使用音乐平台提供的最大封面")
+        self.self_host_progress: BoolParam | bool = BoolParam(
+            True, "自行托管进度"
+        ).set_help("勾选后, SMTC将在音乐平台未提供歌曲进度信息时, "
+                   "通过歌曲信息、SMTC播放状态及计时器自行计算并更新歌曲进度信息")
+        self.map_title: ChoiceParamPlus | str = ChoiceParamPlus(
+            FIELD_TITLE, FIELD_CHOICES, "标题指向"
+        ).set_help("SMTC标题显示歌曲信息中的哪个字段")
+        self.map_artist: ChoiceParamPlus | str = ChoiceParamPlus(
+            FIELD_ARTIST, FIELD_CHOICES, "作者指向"
+        ).set_help("SMTC作者显示歌曲信息中的哪个字段")
+        self.map_album_title: ChoiceParamPlus | str = ChoiceParamPlus(
+            FIELD_ALBUM_TITLE, FIELD_CHOICES, "专辑标题指向"
+        ).set_help("SMTC专辑标题显示歌曲信息中的哪个字段")
+        self.map_album_artist: ChoiceParamPlus | str = ChoiceParamPlus(
+            FIELD_ALBUM_ARTIST, FIELD_CHOICES, "专辑作者指向"
+        ).set_help("SMTC专辑作者显示歌曲信息中的哪个字段")
+        self.never_pause: BoolParam | bool = BoolParam(
+            False, "不暂停SMTC"
+        ).set_help("用于防止在某些情况下歌曲暂停时SMTC会话自动切换。\n"
+                   "也可以前往Wallpaper Engine设置-常规-媒体禁用列表以防止使用官方SMTC")
+        self.cover_cache_format: ChoiceParamPlus | str = ChoiceParamPlus(
+            "jpeg", COVER_FORMAT_CHOICES, "封面缓存格式"
+        ).set_help("封面在本地缓存的格式")
+        self.cover_cache_quality: IntParam | int = IntParam(
+            90, "封面缓存质量 (1-100)"
+        ).set_help("控制JPEG封面缓存的质量")
+        self.refresh_now: ButtonParam = ButtonParam(
+            desc="立即更新信息",
+            help_string="立即重新获取并更新SMTC信息 (会无视缓存联网获取)",
+        )
+        self.clear_cache: ButtonParam = ButtonParam(
+            desc="清除缓存",
+            help_string="清除歌曲信息以及封面缓存",
+        )
+        self.install_shortcut: ButtonParam = ButtonParam(
             desc="安装图标快捷方式 (需要管理员)",
-            help_string="使得在SMTC页面出现 [🅺 Kugou] 而不是 [未知应用]\n"
-                        r"文件位置在 [C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Kugou.lnk]"
+            help_string="使得在SMTC页面出现 [🅺 SMTCWrapper] 而不是 [未知应用]\n"
+                        r"文件位置在 [C:\ProgramData\Microsoft\Windows\Start Menu\Programs\SMTCWrapper.lnk]",
         )
 
 
-class Action(Enum):
-    START = 0
-    END = 1
-    REFRESH_INFO = 2
+class _Action:
+    """生命周期线程的队列消息类型"""
 
-
-def _build_backends(save_format: str | None, save_quality: int) -> dict[str, MusicBackend]:
-    """平台 id -> 后端实例。新增后端只需新建模块并在这里加一行。"""
-    return {
-        kugou.KugouMusicBackend.platform_id: kugou.KugouMusicBackend(save_format, save_quality),
-        netease.NeteaseMusicBackend.platform_id: netease.NeteaseMusicBackend(save_format, save_quality),
-    }
-
-
-def _find_backend(backends: dict[str, MusicBackend], source_id: str | None,
-                  fallback_platform: str) -> MusicBackend | None:
-    """按源会话的应用 id 找对应后端 (source_markers); 认不出来时用配置里选的平台"""
-    source = (source_id or "").lower()
-    if source:
-        for backend in backends.values():
-            if any(marker in source for marker in getattr(backend, "source_markers", ())):
-                return backend
-    return backends.get(fallback_platform)
+    START = "start"
+    STOP = "stop"
+    APPLY_CONFIG = "apply_config"
 
 
 class Plugin(BasePlugin):
+    """插件入口: 配置 / 生命周期 / 刷新编排。
+
+    线程:
+      * GUI 线程: 配置按钮、wx 对话框 (只投递请求, 不做网络/SMTC 调用)
+      * 生命周期线程: start_raw / stop_raw (串行执行, 防止启停交叉)
+      * 刷新线程: 读源会话快照 → 选后端 → 解析歌曲信息/封面 → 写托管会话
+    """
 
     def __init__(self):
         self.config = PluginConfig()
-        self.config.refresh_info.handler = lambda: self.on_source_update(force_update=True)
-        self.config.install_kugou_lnk.handler = self.install_kugou_lnk
-        self.config.clear_cache.handler = self.remove_cache
-        self.config.create_music_report.handler = self.create_report
+        self.config.refresh_now.handler = self.refresh_info
+        self.config.clear_cache.handler = self.clear_cache
+        self.config.install_shortcut.handler = self.install_shortcut
         self.config.load()
 
-        self.action_queue: Queue[Action | MediaPlaybackStatus] = Queue()
-        self.result_queue: Queue[int] = Queue()
-        self.action_thread = Thread(target=self.action_thread_func, daemon=True)
+        # 运行状态 (由生命周期线程维护)
+        self._running = False
+        self._lifecycle_queue: Queue = Queue()
+        self._lifecycle_thread = Thread(target=self._lifecycle_loop, name="MusicSMTCWrapper-Lifecycle",
+                                        daemon=True)
 
-        self.smtc_host = SMTCHost()
-        self.source_manager = SourceManager()
-        # 回调在启动时一次性设置: 两个管理器之间只通过回调联系
-        self.source_manager.on_changed = self.on_source_changed
-        self.source_manager.on_updated = self.on_source_update
-        self.source_manager.on_timeline_changed = self.on_timeline_update
-        self.source_manager.on_plugin_playback = self.smtc_host.set_playback_status
-        self.smtc_host.set_button_callback(self.on_button_press)
+        # 刷新线程: ("full", force) / ("timeline", False)
+        self._refresh_queue: Queue = Queue()
+        self._refresh_thread = Thread(target=self._refresh_loop, name="MusicSMTCWrapper-Refresh",
+                                      daemon=True)
 
-        self.backends = _build_backends(*self._cover_save_policy())
+        # 后端注册表: 新增平台后端只需在这里加一行 (顺序不影响选路, 选路在 _backend_order)
+        self._backends: dict[str, BaseMusicBackend] = {}
+        self._register_backends()
 
-        self.last_song = None
+        # 源 SMTC / 托管 SMTC
+        self._source = SourceSMTC()
+        self._source.on_source_changed = self._on_source_changed
+        self._source.on_info_changed = self._on_info_changed
+        self._source.on_timeline_changed = self._on_timeline_changed
+        self._host = SMTCHost()
+        self._host.set_button_callback(self._on_host_button)
 
-        self.music_reporter = MusicReportManager()
+        # 刷新线程独占的状态 (同一首歌/上一份展示信息)
+        self._last_source_key = ""
+        self._last_music: MusicInfo | None = None
 
-        self.action_thread.start()
+        self._lifecycle_thread.start()
+        self._refresh_thread.start()
 
-    # ================================================================== 平台/配置
-    @property
-    def platform_id(self) -> str:
-        return str(self.config.music_platform)
+    # ================================================================ 后端注册
+    def _register_backends(self):
+        for backend in (kugou.KugouMusicBackend(), netease.NeteaseMusicBackend(),
+                        qqmusic.QqMusicBackend()):
+            self._backends[backend.platform_id] = backend
 
-    def get_backend(self, source_id: str = None) -> MusicBackend | None:
-        """按源会话应用 id 取后端; 认不出来时用配置里选的平台"""
-        return _find_backend(self.backends, source_id, self.platform_id)
+    def _platform_backend(self, platform: str) -> BaseMusicBackend | None:
+        return self._backends.get(str(platform or ""))
+
+    def _backend_order(self, source_platform: str) -> list[BaseMusicBackend]:
+        """后端尝试顺序: 相同平台 > 不同平台 (允许跨平台时); 主平台没有后端时自动降级。
+
+        * 搜索平台为 auto → 主平台 = 源 SMTC 平台;
+        * 搜索平台为具体平台 → 主平台 = 该平台 (用户明确指定);
+        * 主平台没有后端 (例如未来新增但尚未实现后端的平台) → 降级到源平台, 再降级到全部后端;
+        * 其余后端只在「允许从不同平台搜索」时追加。
+        """
+        order: list[BaseMusicBackend] = []
+        search_mode = str(self.config.search_platform or PLATFORM_AUTO)
+        primary = source_platform if search_mode == PLATFORM_AUTO else search_mode
+        backend = self._platform_backend(primary)
+        if backend is not None:
+            order.append(backend)
+        else:
+            logger.warning(f"搜索平台 [{primary}] 没有对应后端, 自动降级")
+            fallback = self._platform_backend(source_platform)
+            if fallback is not None:
+                order.append(fallback)
+        allow_cross = bool(self.config.allow_cross_platform)
+        for candidate in self._backends.values():
+            if candidate in order:
+                continue
+            if not order:
+                # 一个可用后端都没有: 无论是否允许跨平台都必须兜底
+                order.append(candidate)
+            elif allow_cross:
+                order.append(candidate)
+        return order
+
+    # ================================================================ 生命周期
+    def start(self):
+        """插件启动入口 (GUI 调用): 投递给生命周期线程, 不阻塞 GUI"""
+        self._lifecycle_queue.put((_Action.START, None, None))
+
+    def stop(self):
+        """插件停止入口 (GUI 调用): 等待清理完成, 避免线程/会话残留"""
+        done = Event()
+        self._lifecycle_queue.put((_Action.STOP, None, done))
+        if not done.wait(timeout=LIFECYCLE_TIMEOUT):
+            logger.warning("停止插件超时: 后台清理可能仍在进行")
+
+    def _lifecycle_loop(self):
+        while True:
+            item = self._lifecycle_queue.get()
+            action, payload, done = item
+            try:
+                if action == _Action.START:
+                    self._start_raw()
+                elif action == _Action.STOP:
+                    self._stop_raw()
+                elif action == _Action.APPLY_CONFIG:
+                    old_config, new_config = payload
+                    self._apply_config_runtime(old_config, new_config)
+            except Exception as e:  # noqa: BLE001 - 后台线程不能因为一次异常就退出
+                logger.error(f"插件生命周期操作失败: {e.__class__.__name__}: {e}", exc_info=True)
+            finally:
+                if done is not None:
+                    done.set()
+
+    def _start_raw(self):
+        if self._running:
+            logger.warning("插件已经在运行, 忽略重复启动")
+            return
+        logger.info("启动 MusicSMTCWrapper")
+        self._apply_backend_config()
+        for backend in self._backends.values():
+            backend.load_cache()
+
+        # 手动计算配置在 SMTC 会话启动前同步给托管会话
+        self._host.configure(never_pause=bool(self.config.never_pause),
+                             self_host_progress=bool(self.config.self_host_progress))
+        if not self._host.create():
+            logger.error("创建托管 SMTC 会话失败")
+        self._source.start()
+        self._source.set_platform_mode(self._source_platform_mode())
+        self._source.find()
+        self._running = True
+        self._last_source_key = ""
+        self._last_music = None
+        if self._source.has_source():
+            self._request_refresh(force=True)
+        else:
+            logger.info("暂时没有找到目标SMTC会话, 显示默认信息")
+            self._show_default()
+
+    def _stop_raw(self):
+        if not self._running:
+            return
+        logger.info("停止 MusicSMTCWrapper")
+        self._running = False
+        for backend in self._backends.values():
+            try:
+                backend.save_cache()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"保存缓存失败: {e.__class__.__name__}: {e}")
+        self._source.stop()
+        self._host.destroy()
+        self._last_source_key = ""
+        self._last_music = None
+
+    def update_config(self, old_config: dict[str, Any], new_config: dict[str, Any]):
+        """配置更新 (GUI 在「应用/确定」后调用)。
+
+        配置值 / 后端 / 托管会话配置立即生效; 需要操作源会话的部分 (平台切换、重新筛选)
+        投递给生命周期线程, 避免 GUI 线程同步等待 WinRT。
+        """
+        self.config.load_values(new_config)
+        self._apply_backend_config()
+        self._host.configure(never_pause=bool(self.config.never_pause),
+                             self_host_progress=bool(self.config.self_host_progress))
+        if not self._running:
+            return
+        self._lifecycle_queue.put((_Action.APPLY_CONFIG, (old_config, new_config), None))
+
+    def _apply_config_runtime(self, old_config: dict[str, Any], new_config: dict[str, Any]):
+        """在生命周期线程上应用需要改源会话的配置 (源平台模式变化 / 重新解析信息)。"""
+        if not self._running:
+            return
+        if old_config.get("source_platform") != new_config.get("source_platform"):
+            logger.info(f"源SMTC平台变更: {old_config.get('source_platform')} -> "
+                        f"{new_config.get('source_platform')}")
+            self._source.set_platform_mode(self._source_platform_mode())
+            self._source.find()
+        # 字段指向 / 封面尺寸 / 搜索平台等配置变化要立刻重新解析一遍 (命中缓存时很快)
+        self._last_source_key = ""
+        self._last_music = None
+        self._request_refresh(force=False)
+
+    # ================================================================ 配置读取
+    def _apply_backend_config(self):
+        save_format, quality = self._cover_save_policy()
+        for backend in self._backends.values():
+            backend.update_config(save_format, quality)
 
     def _cover_save_policy(self) -> tuple[str | None, int]:
-        """把旧的封面缓存格式/质量配置翻译成缓存层需要的 (格式, 质量)。
-
-        ``None`` 表示「原格式」: 由封面来源决定存 PNG 还是 JPEG。
-        """
-        fmt = self.config.cover_cache_format
-        if fmt == CoverCacheFmt.PNG:
-            save_format: str | None = "PNG"
-        elif fmt == CoverCacheFmt.RAW_FORMAT:
-            save_format = None
-        else:
-            save_format = "JPEG"
-        return save_format, int(self.config.cover_cache_quality)
+        """配置 -> 缓存层需要的 (格式, 质量); None 表示保持原图格式"""
+        fmt = str(self.config.cover_cache_format or "jpeg")
+        save_format = {"jpeg": "JPEG", "png": "PNG"}.get(fmt)
+        try:
+            quality = int(self.config.cover_cache_quality)
+        except (TypeError, ValueError):
+            quality = 90
+        return save_format, max(1, min(100, quality))
 
     def _cover_target_size(self) -> int:
-        """配置 -> 目标封面尺寸 (use_max_size 等价于请求最大封面)"""
-        if self.config.use_max_size:
+        """配置 -> 请求封面尺寸 (FULL_COVER_SIZE 表示最大封面)"""
+        if bool(self.config.use_max_cover):
             return FULL_COVER_SIZE
         try:
             return int(self.config.cover_size)
         except (TypeError, ValueError):
-            return 480
+            return DEFAULT_COVER_SIZE
 
-    def _sync_config(self):
-        """配置同步入口: 配置 -> SourceManager / SMTCHost / 各后端"""
-        self.source_manager.bind(self.config)
-        self.smtc_host.bind(self.config, self.source_manager.source_id)
-        save_format, save_quality = self._cover_save_policy()
-        for backend in self.backends.values():
-            backend.update_config(save_format, save_quality)
+    def _source_platform_mode(self) -> str:
+        mode = str(self.config.source_platform or PLATFORM_AUTO)
+        return mode if mode in SOURCE_PLATFORM_CHOICES else PLATFORM_AUTO
 
-    # ================================================================== 插件生命周期
-    def start(self):
-        self.action_queue.put(Action.START)
+    def _display_mapping(self) -> dict[str, str]:
+        """字段指向配置 -> MusicInfo.mapped 用的映射"""
+        return {
+            FIELD_TITLE: normalize_field(self.config.map_title),
+            FIELD_ARTIST: normalize_field(self.config.map_artist),
+            FIELD_ALBUM_TITLE: normalize_field(self.config.map_album_title),
+            FIELD_ALBUM_ARTIST: normalize_field(self.config.map_album_artist),
+        }
 
-    def start_raw(self):
-        self._sync_config()
-        logger.info("加载封面缓存")
-        self.load_cache()
-        self.smtc_host.create()
-        self._sync_config()
-        self.default()
-        logger.info("启动源会话管理器 (注册会话列表事件 + 单线程 worker)")
-        # SourceManager 自己负责源会话事件的注册/注销, 以及所有源会话操作的单线程化
-        self.source_manager.bind(self.config)
-        self.source_manager.start()
-        self.update_source_session()
+    # ================================================================ 源会话回调
+    # 这些回调在 SourceSMTC 的回调分发线程上执行: 只投递刷新请求, 不做耗时操作。
+    def _on_source_changed(self):
+        self._request_refresh(force=False)
 
-    def stop(self):
-        self.music_reporter.flush()
-        self.music_reporter.save()
+    def _on_info_changed(self):
+        self._request_refresh(force=False)
 
-        self.action_queue.put(Action.END)
+    def _on_timeline_changed(self):
+        self._request_refresh(kind=_REFRESH_TIMELINE)
 
-    def stop_raw(self):
-        self.save_cache()
-        logger.info("停止源会话管理器 (注销事件 + 停 worker)")
-        self.source_manager.stop()
-        logger.info("删除SMTC对象")
-        self.smtc_host.destroy()
-        self.last_song = None
+    def _on_host_button(self, button: str):
+        """托管会话的按钮 -> 转发给源会话 (在回调分发线程上执行, send_button 是异步投递)"""
+        logger.debug(f"托管SMTC按钮: {button}")
+        self._source.send_button(str(button or ""))
 
-    def update_config(self, old_config: dict[str, Any], new_config: dict[str, Any]):
-        self.config.load_values(new_config)
-        self._sync_config()
-        if self.enable:
-            if self.config.allways_playing:
-                self.action_queue.put(MediaPlaybackStatus.PLAYING)
-            self.action_queue.put(Action.REFRESH_INFO)
+    # ================================================================ 刷新线程
+    def _request_refresh(self, force: bool = False, kind: str = _REFRESH_FULL):
+        if not self._running:
+            return
+        self._refresh_queue.put((kind, bool(force)))
 
-            if old_config["enable_music_report"] != new_config[
-                "enable_music_report"] and not self.config.enable_music_report:
-                self.music_reporter.flush()
+    def refresh_info(self):
+        """「立即更新信息」按钮: 无视缓存联网刷新 (GUI 线程只投递)"""
+        self._request_refresh(force=True)
 
-            if old_config["music_platform"] != new_config["music_platform"]:
-                # 歌曲平台变了: 让 SourceManager 注销旧会话事件并按新平台重新筛选
-                logger.info(f"歌曲平台变更: {old_config['music_platform']} -> {new_config['music_platform']}")
-                self.source_manager.switch_platform(self.platform_id)
-                self.smtc_host.bind(self.config, self.source_manager.source_id)
-                self.last_song = None
-                self.on_source_update(force_update=True)
-
-    def action_thread_func(self):
+    def _refresh_loop(self):
         while True:
-            action = self.action_queue.get()
-            if action == Action.START:
-                self.start_raw()
-            elif action == Action.END:
-                self.stop_raw()
-            elif isinstance(action, MediaPlaybackStatus):
-                self.smtc_host.set_playback_status(action)
+            item = self._refresh_queue.get()
+            if item is None:
+                return
+            kind, force = item
+            # 防抖 + 合并: 连续事件只处理一次, 保持「全量优先、force 优先」
+            sleep(REFRESH_DEBOUNCE)
+            while True:
+                try:
+                    nxt = self._refresh_queue.get_nowait()
+                except Empty:
+                    break
+                if nxt is None:
+                    return
+                nkind, nforce = nxt
+                if nkind == _REFRESH_FULL:
+                    kind = _REFRESH_FULL
+                force = force or nforce
+            if not self._running:
+                continue
+            try:
+                if kind == _REFRESH_TIMELINE:
+                    self._refresh_timeline()
+                else:
+                    self._refresh(force)
+            except Exception as e:  # noqa: BLE001 - 刷新失败只记录, 不能打死刷新线程
+                logger.error(f"刷新SMTC信息失败: {e.__class__.__name__}: {e}", exc_info=True)
 
-    # ================================================================== 缓存
-    def load_cache(self):
-        for backend in self.backends.values():
-            backend.load_cache()
+    def _refresh_timeline(self):
+        """只同步进度/播放状态 (不联网, 不重新读封面)"""
+        snapshot = self._source.snapshot(include_thumbnail=False)
+        if snapshot is None or not snapshot.is_valid:
+            return
+        self._host.set_playback_status(snapshot.playback_status)
+        timeline = self._timeline_of(snapshot)
+        if timeline is not None:
+            self._host.update_timeline(*timeline)
 
-    def save_cache(self):
-        for backend in self.backends.values():
-            backend.save_cache()
+    def _refresh(self, force: bool = False):
+        """完整刷新: 读源会话信息 -> 后端解析 -> 写托管会话"""
+        if not self._running:
+            return
+        snapshot = self._source.snapshot(include_thumbnail=True)
+        if snapshot is None:
+            # 瞬时读取失败 (例如 WinRT 5s 超时): 有源且已展示过信息时保持现状, 避免默认信息闪烁
+            if self._source.has_source() and self._last_music is not None:
+                logger.debug("读取源SMTC快照失败, 保持当前显示")
+                return
+            self._last_source_key = ""
+            self._last_music = None
+            self._show_default()
+            return
+        if not snapshot.is_valid:
+            self._last_source_key = ""
+            self._last_music = None
+            self._show_default()
+            return
 
-    def remove_cache(self):
-        conf = wx.MessageBox("确定要清除封面缓存吗?", "WinEnchantKit - 高清酷狗封面",
+        source_info = snapshot.to_music_info()
+        timeline = self._timeline_of(snapshot)
+        source_key = snapshot.unique_key()
+
+        # 同一首歌: 只更新播放状态/进度, 不联网
+        if not force and source_key == self._last_source_key and self._last_music is not None:
+            self._host.set_playback_status(snapshot.playback_status)
+            if timeline is not None:
+                self._host.update_timeline(*timeline)
+            return
+
+        info, cover = self._resolve_music(snapshot, source_info, force)
+        if not self._running:
+            # 解析期间插件被停止: 丢弃这次结果 (避免停止后仍写托管会话)
+            return
+        display = info.mapped(self._display_mapping()).with_length(info.length)
+        duration = display.length
+        if duration <= 0 and timeline is not None:
+            duration = max(0.0, timeline[2] - timeline[0])
+
+        self._host.update(display, cover, snapshot.playback_status,
+                          duration=duration, source_timeline=timeline)
+        self._last_source_key = source_key
+        self._last_music = display
+        if cover is not None:
+            logger.info(f"更新SMTC信息: {display.title} - {display.artist} "
+                        f"(专辑: {display.album_title or '-'}; 封面: {cover.width}x{cover.height})")
+        else:
+            logger.info(f"更新SMTC信息: {display.title} - {display.artist} (无封面)")
+
+    def _resolve_music(self, snapshot: SourceSnapshot, source_info: MusicInfo,
+                       force: bool) -> tuple[MusicInfo, Image.Image | None]:
+        """按优先级解析歌曲信息与封面: 相同后端 > 不同后端 > 源SMTC封面"""
+        source_cover = self._image_from_bytes(snapshot.thumbnail)
+        size = self._cover_target_size()
+        use_similarity = bool(self.config.use_cover_similarity)
+        for backend in self._backend_order(snapshot.platform):
+            try:
+                resolved = backend.fetch(source_info, size, source_cover=source_cover,
+                                         use_similarity=use_similarity, force_refresh=force)
+            except Exception as e:  # noqa: BLE001 - 单个后端失败不应影响后续后端
+                logger.error(f"后端 [{backend.platform_id}] 解析失败: {e.__class__.__name__}: {e}")
+                continue
+            if resolved is None:
+                continue
+            info = resolved.info.with_length(resolved.info.length or source_info.length)
+            logger.debug(f"后端 [{backend.platform_id}] 命中 (缓存: {resolved.from_cache})")
+            return info, resolved.cover
+        # 所有后端都失败: 回退源 SMTC 缩略图 (不放大, 保持原样)
+        logger.warning(f"没有找到可用的高清歌曲信息, 使用源SMTC封面: "
+                       f"{source_info.title} - {source_info.artist}")
+        return source_info, source_cover
+
+    @staticmethod
+    def _timeline_of(snapshot: SourceSnapshot) -> tuple[float, float, float] | None:
+        """源会话进度 -> (start, position, end); 平台没提供进度时返回 None"""
+        try:
+            start = float(snapshot.timeline_start or 0.0)
+            position = float(snapshot.timeline_position or 0.0)
+            end = float(snapshot.timeline_end or 0.0)
+        except (TypeError, ValueError):
+            return None
+        if end <= 0.0 or end <= start:
+            return None
+        return start, max(start, min(position, end)), end
+
+    @staticmethod
+    def _image_from_bytes(data: bytes | None) -> Image.Image | None:
+        if not data:
+            return None
+        try:
+            with Image.open(BytesIO(bytes(data))) as image:
+                image.load()
+                return image.copy()
+        except Exception as e:  # noqa: BLE001 - 源缩略图坏了就当没有
+            logger.debug(f"读取源SMTC缩略图失败: {e.__class__.__name__}: {e}")
+            return None
+
+    def _show_default(self):
+        """没有可用源会话时显示默认信息"""
+        self._last_source_key = ""
+        self._last_music = None
+        if self._host is None:
+            return
+        self._host.display_default()
+        self._host.set_playback_status("stopped")
+
+    # ================================================================ 缓存 / 按钮
+    def clear_cache(self):
+        """「清除缓存」按钮: 清空所有后端的歌曲信息与封面缓存"""
+        conf = wx.MessageBox("确定要清除歌曲信息以及封面缓存吗?", WINDOW_TITLE,
                              wx.YES_NO | wx.ICON_QUESTION)
         if conf != wx.YES:
             return
-        for backend in self.backends.values():
-            total = backend.music_cache.count() + 1
-            dialog = wx.ProgressDialog("正在删除缓存", "请稍候...", max(1, total), None,
+        for backend in self._backends.values():
+            total = max(1, backend.cache_file_count() + 1)
+            dialog = wx.ProgressDialog("正在删除缓存", "请稍候...", total, None,
                                        wx.CENTRE | wx.RESIZE_BORDER)
-            # clear_cache 是生成器: 每删一项 yield 一次进度
-            for done, count, filename in backend.clear_cache():
-                dialog.Update(done, f"({done}/{count})\n正在删除缓存: {filename}")
-            dialog.Destroy()
+            try:
+                for done, count, filename in backend.clear_cache():
+                    dialog.Update(done, f"({done}/{count})\n正在删除缓存: {filename}")
+            finally:
+                dialog.Destroy()
+        self._request_refresh(force=True)
 
-    # ================================================================== 源会话事件
-    # 以下三个回调由 SourceManager 调用 (在它的 worker 线程 / WinRT 事件线程上),
-    # 回调本身只做编排, 所有源会话的读取都通过 SourceManager (它内部再串行到唯一 worker)。
-    def on_source_changed(self):
-        """会话列表发生变化: 当前源会话还有效就什么都不做, 否则断开重找"""
-        if self.check_source_valid():
+    # ================================================================ 快捷方式
+    def install_shortcut(self):
+        """「安装图标快捷方式」按钮: 让 SMTC 页面显示 [SMTCWrapper] 而不是 [未知应用]"""
+        program_dir = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
+        temp_dir = expandvars(r"%TEMP%\WinEnchantKit")
+        makedirs(temp_dir, exist_ok=True)
+        temp_path = join(temp_dir, "SMTCWrapper.lnk")
+        target_path = join(program_dir, "SMTCWrapper.lnk")
+
+        target_executable, icon_file = self._shortcut_target()
+        try:
+            lnk = pylnk3.for_file(target_executable, icon_file=icon_file, icon_index=0)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"创建快捷方式对象失败: {e.__class__.__name__}: {e}")
+            wx.MessageBox(f"{e.__class__.__name__}: {e}\n创建快捷方式失败", WINDOW_TITLE,
+                          wx.OK | wx.ICON_ERROR)
             return
-        logger.info("SMTC会话已失效")
-        self.update_source_session(update_or_destroyed=False)
-
-    def update_source_session(self, update_or_destroyed: bool = False):
-        """重新筛选源会话; update_or_destroyed=True 时先主动断开当前的"""
-        logger.debug(f"更新SMTC源: {update_or_destroyed}")
-        if self.source_manager.has_source:
-            self.source_manager.release()
-            self.last_song = None
-            self.smtc_host.bind(self.config, None)
-            self.smtc_host.set_playback_status(MediaPlaybackStatus.STOPPED)
-            self.default()
-        if self.source_manager.find():
-            self.smtc_host.bind(self.config, self.source_manager.source_id)
-            if self.config.allways_playing:
-                self.smtc_host.set_playback_status(MediaPlaybackStatus.PLAYING)
-            self.on_source_update()
-        else:
-            logger.info("暂时没有找到目标SMTC")
-
-    def check_source_valid(self) -> bool:
-        return self.source_manager.valid()
-
-    def default(self):
-        if self.smtc_host.smtc is None:
-            wx.MessageBox("请先启用插件", "WinEnchantKit - 高清酷狗封面", wx.OK | wx.ICON_WARNING)
-            return
-        self.smtc_host.display_default()
-
-    # ================================================================== 歌曲信息刷新
-    def on_timeline_update(self, *_):  # 当歌曲进度条更新时
-        if not self.check_source_valid():
-            return
-        # 只有萌音需要把进度条透传给插件会话
-        if "moekoe" in (self.source_manager.source_id or "").lower():
-            self.smtc_host.update_timeline(self.source_manager.timeline_properties())
-
-    def on_source_update(self, *_, force_update: bool = False):
-        if not self.check_source_valid():
-            if force_update:
-                self.default()
-            return
-
-        info = self.source_manager.info()
-        if info is None:
-            return
-        song_id = f"{info.title}{info.artist}{info.album_title}{info.album_artist}"
-
-        # 同步播放状态
-        status: MediaPlaybackStatus = self.source_manager.status()
-        if status != self.smtc_host.playback_status and not self.config.allways_playing:
-            self.smtc_host.set_playback_status(status)
-
-        self._handle_music_report(info, status)
-        self.on_timeline_update()
-
-        if song_id == self.last_song and not force_update:
-            # logger.debug(f"歌曲信息更新, 歌名相同, 不更新, {str([status])[1:-1]}, {song_id}")
-            return
-        # 后端按源会话应用 id 选 (切换平台/软件时自动切换), 认不出来才用配置里选的平台
-        backend = self.get_backend(self.source_manager.source_id)
-        if backend is None:
-            logger.error(f"找不到平台 [{self.platform_id}] 对应的后端")
-            return
-        self.last_song = song_id
-        # 请求尺寸在这里定下来, 后端 get_music_info 直接把封面图备好
-        music = backend.get_music_info(info, self._cover_target_size())
-        self.update_info(music)
-
-    def update_info(self, music: StandardMusicInfo | None):
-        """把后端解析好的歌曲信息 (含封面图) 交给 SMTCHost 写入自建 SMTC 会话。
-
-        封面获取/缓存细节在 backend, SMTC 写入细节在 SMTCHost; 这里只做编排。
-        """
-        if music is None:
-            logger.warning("搜索不到歌曲信息, 使用原封面")
-            return
-        # 归一化可能为空的字段
-        music.album_title = music.album_title or ""
-        music.album_artist = music.album_artist or ""
-        if music.cover is None:
-            cover_text = "无高清封面(保留原封面)"
-        elif music.cover_slot:
-            cover_text = f"{music.cover.width}x{music.cover.height} (缓存 {music.cover_slot}px)"
-        else:
-            cover_text = f"{music.cover.width}x{music.cover.height}"
-        logger.info(f"更新歌曲信息: {music.title} - {music.artist}, 封面: {cover_text}")
-        self.smtc_host.display(music)
-
-    # ================================================================== 音乐报告
-    def _handle_music_report(self, info: SessionMediaProperties, status: MediaPlaybackStatus):
-        self.music_reporter.enabled = bool(self.config.enable_music_report)
-        self.music_reporter.handle(info, status)
-
-    def create_report(self):
-        path = self.music_reporter.generate_report()
-        Thread(target=os.system, args=(path,), daemon=True).start()
-
-    # ================================================================== SMTC 按钮
-    def on_button_press(self, _, args):
-        """插件会话按钮 -> 交给 SourceManager (在它的 worker 线程上操作源会话)"""
-        if not self.check_source_valid():
-            return
-        self.source_manager.handle_button(args)
-
-    # ================================================================== 快捷方式
-    @staticmethod
-    def install_kugou_lnk():
-        program = r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
-        temp_dir = expandvars("%TEMP%\WinEnchantKit")
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_path = join(temp_dir, r"Kugou.lnk")
-        target_path = join(program, "Kugou.lnk")
-        if "pythonw.exe" in sys.orig_argv[0]:
-            exec_name = "pythonw.exe"
-        else:
-            exec_name = "python.exe"
-        base_executable_path = join(sys.base_prefix, exec_name)
-        kugou_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\kugou")
-        kugou_path = join(winreg.QueryValueEx(kugou_key, "KuGou8")[0], "KuGou.exe")
-
-        lnk = pylnk3.for_file(base_executable_path, icon_file=kugou_path, icon_index=0)
         try:
             lnk.save(target_path)
-            wx.MessageBox("创建快捷方式成功！\n记得重启程序哦", "成功！ - ( •̀ ω •́ )✧", wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox("创建快捷方式成功！\n记得重启程序哦", "成功！ - ( •̀ ω •́ )✧",
+                          wx.OK | wx.ICON_INFORMATION)
             return
         except OSError:
+            # 没有管理员权限: 先存到临时目录, 再用提权 bat 复制
             pass
-        lnk.save(temp_path)
-        lnk_install_bat = expandvars(r"%TEMP%\WinEnchantKit-Plugin-HDKugouCover-Kugou-Lnk-Install.bat")
-        with open(lnk_install_bat, "w+") as f:
+        try:
+            lnk.save(temp_path)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"保存临时快捷方式失败: {e.__class__.__name__}: {e}")
+            wx.MessageBox(f"{e.__class__.__name__}: {e}\n保存临时快捷方式失败", WINDOW_TITLE,
+                          wx.OK | wx.ICON_ERROR)
+            return
+        bat_path = join(temp_dir, "MusicSMTCWrapper-Shortcut-Install.bat")
+        with open(bat_path, "w+", encoding="utf-8") as f:
             f.write("\n".join([
-                f'move "{temp_path}" "{target_path}"'
+                f'move /Y "{temp_path}" "{target_path}"',
             ]))
         try:
-            ShellExecuteEx(lpVerb="runas", lpFile=lnk_install_bat, nShow=con.SW_HIDE)
-            wx.MessageBox("创建快捷方式成功！\n记得重启程序哦", "成功！ - ( •̀ ω •́ )✧", wx.OK | wx.ICON_INFORMATION)
+            ShellExecuteEx(lpVerb="runas", lpFile=bat_path, nShow=con.SW_HIDE)
+            wx.MessageBox("创建快捷方式成功！\n记得重启程序哦", "成功！ - ( •̀ ω •́ )✧",
+                          wx.OK | wx.ICON_INFORMATION)
             return
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"{e.__class__.__name__}: {e} -> 运行快捷方式复制脚本失败")
             ret = wx.MessageBox(f"{e.__class__.__name__}: {e}\n"
                                 "运行快捷方式复制脚本失败\n"
                                 "要打开 lnk所在目录 和 目标文件夹 吗?",
-                                f"失败啦~ - ＞︿＜",
+                                "失败啦~ - ＞︿＜",
                                 wx.YES_NO | wx.ICON_ERROR)
         if ret == wx.YES:
-            os.startfile(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs")
-            Thread(target=os.system, args=[f"explorer /select,{temp_path}"], daemon=True).start()
+            os.startfile(program_dir)
+            Thread(target=os.system, args=(f'explorer /select,"{temp_path}"',), daemon=True).start()
             wx.MessageBox("已打开两个文件夹！\n"
                           "请移动lnk至 [C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs]\n"
                           "创建快捷方式成功！(虽说是保存到别处\n"
                           "记得重启程序哦",
                           "成功！ - (*^▽^*)", wx.OK | wx.ICON_INFORMATION)
 
+    @staticmethod
+    def _shortcut_target() -> tuple[str, str]:
+        """快捷方式指向的可执行文件 + 图标文件。
 
-if __name__ == "__main__":
-    import logging
-
-    logger.setLevel(logging.DEBUG)
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
-    logger.addHandler(console_handler)
-    plugin = Plugin()
-    plugin.start_raw()
-    input()
-    plugin.stop_raw()
-    input()
-    plugin.start_raw()
-    input()
+        * 源码运行: 指向当前 Python 解释器, 图标用仓库 assets/icon.ico (WinEnchantKit 图标)
+        * 冻结成 exe: 指向程序自身并直接使用自身图标
+        """
+        if getattr(sys, "frozen", False):
+            return sys.executable, sys.executable
+        orig_argv = list(getattr(sys, "orig_argv", []) or [""])
+        exec_name = "pythonw.exe" if orig_argv and "pythonw.exe" in str(orig_argv[0]) else "python.exe"
+        target_executable = join(sys.base_prefix, exec_name)
+        icon_file = join(dirname(dirname(_PLUGIN_DIR)), "assets", "icon.ico")
+        if not isfile(icon_file):
+            logger.warning(f"找不到 WinEnchantKit 图标: {icon_file}, 使用解释器自身图标")
+            icon_file = sys.executable
+        return target_executable, icon_file
