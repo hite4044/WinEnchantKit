@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import requests
@@ -46,6 +47,10 @@ WEB_HEADERS: dict[str, str] = {
 }
 SEARCH_URL = ("https://music.163.com/api/search/get/web?csrf_token=hlpretag=&hlposttag="
               "&s={keyword}&type=1&offset=0&total=true&limit={limit}")
+# 备用官方搜索入口: 实测 `/api/search/get/web` 被限流 (405 操作频繁) 时这两个仍然可用
+SEARCH_URL_FALLBACK = ("https://music.163.com/api/search/get"
+                       "?s={keyword}&type=1&offset=0&limit={limit}")
+CLOUDSEARCH_URL = "https://music.163.com/api/cloudsearch/pc"
 # 详情接口: v3 更“现代”但实测常返回 album.picUrl=null, 旧接口稳定给出 picUrl, 因此以旧接口为主、v3 兜底
 DETAIL_URL = "https://music.163.com/api/song/detail?ids=%5B{ids}%5D"
 DETAIL_URL_V3 = "https://music.163.com/api/v3/song/detail?c=%5B%7B%22id%22%3A{ids}%7D%5D"
@@ -56,6 +61,12 @@ SIZE_PARAM = "?param={size}y{size}"
 SEARCH_LIMIT = 10
 SEARCH_TIMEOUT = 10.0
 DETAIL_TIMEOUT = 10.0
+# 网易云接口限流 (code=405 "操作频繁") 后的冷却时间 (秒)
+RATE_LIMIT_COOLDOWN = 20.0
+
+
+class NeteaseRateLimit(RuntimeError):
+    """网易云接口返回限流错误 (code=405 / "操作频繁")。"""
 
 
 def cover_url(pic_url: str, size: int = 480) -> str:
@@ -70,8 +81,22 @@ def cover_url(pic_url: str, size: int = 480) -> str:
     return pic_url + SIZE_PARAM.format(size=int(size))
 
 
+def _check_rate_limit(payload: Any) -> Any:
+    """识别网易云的限流响应: HTTP 200 + ``{"code":405,"msg":"操作频繁"}``"""
+    if isinstance(payload, dict):
+        code = payload.get("code")
+        message = str(payload.get("message") or payload.get("msg") or "")
+        if code in (405, 406) or "操作频繁" in message:
+            raise NeteaseRateLimit(f"接口限流: code={code} {message}".strip())
+    return payload
+
+
 def _get_json(url: str, timeout: float = SEARCH_TIMEOUT) -> Any | None:
-    """GET 并解析 JSON: 连接失败返回 None, HTTP / JSON 错误抛 RuntimeError。"""
+    """GET 并解析 JSON: 连接失败返回 None, HTTP / JSON 错误抛 RuntimeError。
+
+    网易云在短时间内请求过多会返回 HTTP 200 + ``{"code":405,"msg":"操作频繁，请稍候再试"}``,
+    这种响应统一转成 :class:`NeteaseRateLimit`, 由调用方切换备用入口/冷却处理。
+    """
     try:
         resp = requests.get(url, headers=WEB_HEADERS, timeout=timeout)
     except requests.exceptions.ConnectionError:
@@ -81,15 +106,31 @@ def _get_json(url: str, timeout: float = SEARCH_TIMEOUT) -> Any | None:
     if resp.status_code != 200:
         raise RuntimeError(f"服务器返回HTTP错误码 [{resp.status_code}]")
     try:
-        return resp.json()
+        payload = resp.json()
     except ValueError as e:
         raise RuntimeError(f"服务器返回非 JSON 数据: {e}") from e
+    return _check_rate_limit(payload)
 
 
-def search_song_list(keyword: str, limit: int = SEARCH_LIMIT) -> list[dict[str, Any]]:
-    """调用旧搜索接口, 返回 ``result.songs`` 原始列表 (无结果/连接失败给 [])。"""
-    logger.debug(f"歌曲搜索关键字: \"{keyword}\"")
-    payload = _get_json(SEARCH_URL.format(keyword=keyword, limit=int(limit)))
+def _post_json(url: str, data: dict[str, Any], timeout: float = SEARCH_TIMEOUT) -> Any | None:
+    """POST 表单并解析 JSON (备用搜索入口 cloudsearch/pc 用)。"""
+    try:
+        resp = requests.post(url, data=data, headers=WEB_HEADERS, timeout=timeout)
+    except requests.exceptions.ConnectionError:
+        return None
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"网络请求失败: {e.__class__.__name__}: {e}") from e
+    if resp.status_code != 200:
+        raise RuntimeError(f"服务器返回HTTP错误码 [{resp.status_code}]")
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        raise RuntimeError(f"服务器返回非 JSON 数据: {e}") from e
+    return _check_rate_limit(payload)
+
+
+def _extract_songs(payload: Any) -> list[dict[str, Any]]:
+    """从搜索响应里取出 ``result.songs`` 列表 (结构异常给空列表)"""
     if not isinstance(payload, dict):
         return []
     result = payload.get("result")
@@ -97,6 +138,52 @@ def search_song_list(keyword: str, limit: int = SEARCH_LIMIT) -> list[dict[str, 
     if not isinstance(songs, list):
         return []
     return [song for song in songs if isinstance(song, dict)]
+
+
+def _has_result(payload: Any) -> bool:
+    """响应是否是"正常返回了搜索结果结构" (用于区分限流/异常与空结果)"""
+    return isinstance(payload, dict) and isinstance(payload.get("result"), dict)
+
+
+def search_song_list(keyword: str, limit: int = SEARCH_LIMIT) -> list[dict[str, Any]]:
+    """搜索网易云歌曲, 返回 ``result.songs`` 原始列表 (无结果/连接失败给 [])。
+
+    官方入口依次尝试 (都是 music.163.com 官方接口, 匿名可用):
+      1. ``/api/search/get/web`` (主接口);
+      2. ``/api/search/get`` (主接口被限流时可用);
+      3. ``POST /api/cloudsearch/pc`` (网页搜索接口, 最后兜底)。
+    只有全部入口都返回限流时才抛 :class:`NeteaseRateLimit`。
+    """
+    logger.debug(f"歌曲搜索关键字: \"{keyword}\"")
+    limit = max(1, int(limit))
+    last_rate_limit: NeteaseRateLimit | None = None
+    for url in (SEARCH_URL.format(keyword=keyword, limit=limit),
+                SEARCH_URL_FALLBACK.format(keyword=keyword, limit=limit)):
+        try:
+            payload = _get_json(url)
+        except NeteaseRateLimit as e:
+            logger.info(f"网易云搜索入口被限流, 尝试备用入口: {e}")
+            last_rate_limit = e
+            continue
+        if _has_result(payload):
+            return _extract_songs(payload)
+        if payload is not None:
+            # 正常返回但结构不符合预期: 换下一个入口
+            continue
+    try:
+        payload = _post_json(CLOUDSEARCH_URL, {
+            "s": keyword, "type": "1", "limit": str(limit),
+            "offset": "0", "total": "true",
+        })
+    except NeteaseRateLimit as e:
+        logger.info(f"网易云搜索备用入口 cloudsearch 也被限流: {e}")
+        last_rate_limit = e
+        payload = None
+    if _has_result(payload):
+        return _extract_songs(payload)
+    if last_rate_limit is not None:
+        raise last_rate_limit
+    return []
 
 
 def song_detail(song_id: int) -> dict[str, Any] | None:
@@ -159,6 +246,8 @@ class NeteaseMusicBackend(BaseMusicBackend):
         super().__init__(cover_format, cover_quality)
         # 内存缓存: 歌曲 id -> 详情 dict (避免相似度比对/多尺寸请求时重复查详情)
         self._detail_cache: dict[int, dict[str, Any]] = {}
+        # 限流冷却截止时间 (time.monotonic); 冷却期内不再联网搜索, 直接用缓存/源封面
+        self._blocked_until = 0.0
 
     def request_headers(self) -> dict[str, str]:
         """联网请求头: 沿用旧实现的 ``WEB_HEADERS`` (含 Referer)"""
@@ -176,10 +265,18 @@ class NeteaseMusicBackend(BaseMusicBackend):
         if not title and not artist:
             return []
         logger.debug(f"网易云搜索: title=\"{title}\" artist=\"{artist}\"")
+        if time.monotonic() < self._blocked_until:
+            logger.debug("网易云搜索处于限流冷却期, 本次跳过联网 (使用缓存/源封面)")
+            return []
         candidates: list[CoverCandidate] = []
         for keyword in search_keyword_variants(title, artist):
             try:
                 songs = search_song_list(keyword)
+            except NeteaseRateLimit as e:
+                # 网易云短时间请求过多会 405 "操作频繁": 冷却一段时间, 避免继续触发
+                self._blocked_until = time.monotonic() + RATE_LIMIT_COOLDOWN
+                logger.warning(f"网易云搜索被限流, {RATE_LIMIT_COOLDOWN:.0f}s 内停止联网搜索: {e}")
+                break
             except RuntimeError as e:
                 # 契约: search 失败返回 [] (由基类继续尝试其他来源/后端)
                 logger.warning(f"网易云搜索失败: {e}")

@@ -214,9 +214,13 @@ class SourceSMTC:
 
         # ---- WinRT 事件 token / handler (只用于注销; 只在 worker 上读写) ----
         self._manager_token: Any = None
+        self._media_token: Any = None
         self._playback_token: Any = None
         self._timeline_token: Any = None
         self._manager_handler: Any = None
+        self._media_handler: Any = None
+        # 当前会话是否支持 media_properties_changed (None=尚未确认; False=不支持, 不再重试)
+        self._media_supported: bool | None = None
         self._playback_handler: Any = None
         self._timeline_handler: Any = None
 
@@ -312,9 +316,12 @@ class SourceSMTC:
         self._app_id = ""
         self._platform = ""
         self._manager_token = None
+        self._media_token = None
         self._playback_token = None
         self._timeline_token = None
         self._manager_handler = None
+        self._media_handler = None
+        self._media_supported = None
         self._playback_handler = None
         self._timeline_handler = None
         with self._pending_lock:
@@ -462,6 +469,15 @@ class SourceSMTC:
         logger.debug("收到会话列表变化事件 (%s)", threading.current_thread().name)
         self._post(self._cmd_on_sessions_changed)
 
+    def _handle_media_properties_changed(self, *_args: Any) -> None:
+        """当前源会话歌曲信息变化 (只投递)。
+
+        网易云等播放器切歌时只触发 ``media_properties_changed``, 不触发
+        ``playback_info_changed``; 必须单独注册这个事件, 否则信息更新不会通知 main。
+        """
+        logger.debug("收到会话媒体信息变化事件 (%s)", threading.current_thread().name)
+        self._post(self._cmd_on_media_properties_changed)
+
     def _handle_playback_info_changed(self, *_args: Any) -> None:
         """当前源会话播放信息变化 (只投递)。"""
         self._post(self._cmd_on_playback_info_changed)
@@ -476,6 +492,12 @@ class SourceSMTC:
         if self._closing or not self._running:
             return
         self._revalidate(notify_info=False)
+
+    def _cmd_on_media_properties_changed(self) -> None:
+        """歌曲信息变化: 重新校验; 有效则通知 main 信息变化, 失效则重新筛选。"""
+        if self._closing or not self._running:
+            return
+        self._revalidate(notify_info=True)
 
     def _cmd_on_playback_info_changed(self) -> None:
         """播放信息变化: 重新校验; 有效则通知 main 信息变化, 失效则重新筛选。"""
@@ -692,9 +714,15 @@ class SourceSMTC:
         self._session = None
         self._app_id = ""
         self._platform = ""
+        self._media_supported = None
 
     def _register_session_events(self) -> None:
-        """注册当前会话的播放信息/进度条事件 (先注销旧的, 幂等); 只在 worker 上调用。"""
+        """注册当前会话的媒体信息/播放信息/进度条事件 (先注销旧的, 幂等); 只在 worker 上调用。
+
+        * ``media_properties_changed``: 切歌 (网易云只发这个事件);
+        * ``playback_info_changed``: 播放状态变化 (部分平台切歌时也发);
+        * ``timeline_properties_changed``: 进度变化 (部分平台不提供进度, 可能不触发)。
+        """
         if self._session is None:
             return
         self._unregister_session_events()
@@ -709,12 +737,27 @@ class SourceSMTC:
                          threading.current_thread().name)
         except Exception as e:  # noqa: BLE001 - 注册失败只记录, 不影响读取
             logger.warning("注册源会话事件失败: %s: %s", e.__class__.__name__, e)
+        # 媒体信息事件单独注册: 部分平台/版本可能不支持, 失败不能影响其它事件
+        try:
+            self._media_handler = self._handle_media_properties_changed
+            self._media_token = self._session.add_media_properties_changed(
+                self._media_handler)
+            self._media_supported = True
+        except Exception as e:  # noqa: BLE001 - 不支持该事件时静默忽略
+            logger.debug("注册媒体信息变化事件失败 (平台可能不支持): %s: %s",
+                         e.__class__.__name__, e)
+            self._media_token = None
+            self._media_handler = None
+            self._media_supported = False
 
     def _ensure_session_events(self) -> None:
         """确保当前会话的事件已注册 (token 丢失时重注册); 只在 worker 上调用。"""
         if self._session is None:
             return
-        if self._playback_token is None or self._timeline_token is None:
+        missing_required = (self._playback_token is None or self._timeline_token is None)
+        # media 事件不支持时只尝试一次, 不再反复重注册 (避免事件风暴)
+        missing_media = (self._media_token is None and self._media_supported is not False)
+        if missing_required or missing_media:
             self._register_session_events()
 
     def _unregister_session_events(self) -> None:
@@ -722,6 +765,7 @@ class SourceSMTC:
         session = self._session
         if session is not None:
             for token, remover_name in (
+                    (self._media_token, "remove_media_properties_changed"),
                     (self._playback_token, "remove_playback_info_changed"),
                     (self._timeline_token, "remove_timeline_properties_changed")):
                 if token is None:
@@ -730,8 +774,10 @@ class SourceSMTC:
                     getattr(session, remover_name)(token)
                 except Exception as e:  # noqa: BLE001 - 注销失败不应阻断停止流程
                     logger.warning("注销源会话事件失败: %s: %s", e.__class__.__name__, e)
+        self._media_token = None
         self._playback_token = None
         self._timeline_token = None
+        self._media_handler = None
         self._playback_handler = None
         self._timeline_handler = None
 

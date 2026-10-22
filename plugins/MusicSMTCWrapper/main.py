@@ -89,6 +89,10 @@ _REFRESH_FULL = "full"
 _REFRESH_TIMELINE = "timeline"
 # 请求合并前的防抖时间 (秒): 吸收短时间内的连续事件
 REFRESH_DEBOUNCE = 0.15
+# 单曲循环检测: 托管进度进入结尾前多少秒时, 同一首歌又在播放 => 视为循环/重新开始
+LOOP_END_MARGIN = 1.5
+# 定时轮询兜底间隔 (秒): 有的播放器几乎不发 SMTC 事件 (例如网易云只发 media_properties_changed)
+PERIODIC_POLL_INTERVAL = 1.0
 # 生命周期 / 源接口的等待超时
 LIFECYCLE_TIMEOUT = 30.0
 
@@ -244,6 +248,7 @@ class Plugin(BasePlugin):
         # 刷新线程独占的状态 (同一首歌/上一份展示信息)
         self._last_source_key = ""
         self._last_music: MusicInfo | None = None
+        self._last_playback_status = ""
 
         self._lifecycle_thread.start()
         self._refresh_thread.start()
@@ -337,6 +342,7 @@ class Plugin(BasePlugin):
         self._running = True
         self._last_source_key = ""
         self._last_music = None
+        self._last_playback_status = ""
         if self._source.has_source():
             self._request_refresh(force=True)
         else:
@@ -357,6 +363,7 @@ class Plugin(BasePlugin):
         self._host.destroy()
         self._last_source_key = ""
         self._last_music = None
+        self._last_playback_status = ""
 
     def update_config(self, old_config: dict[str, Any], new_config: dict[str, Any]):
         """配置更新 (GUI 在「应用/确定」后调用)。
@@ -452,7 +459,17 @@ class Plugin(BasePlugin):
 
     def _refresh_loop(self):
         while True:
-            item = self._refresh_queue.get()
+            try:
+                # 带超时: 没有事件时用定时轮询兜底, 照顾几乎不发事件的播放器 (例如网易云)
+                item = self._refresh_queue.get(timeout=PERIODIC_POLL_INTERVAL)
+            except Empty:
+                if not self._running:
+                    continue
+                try:
+                    self._periodic_poll()
+                except Exception as e:  # noqa: BLE001 - 轮询失败只记录
+                    logger.error(f"轮询SMTC信息失败: {e.__class__.__name__}: {e}", exc_info=True)
+                continue
             if item is None:
                 return
             kind, force = item
@@ -479,15 +496,71 @@ class Plugin(BasePlugin):
             except Exception as e:  # noqa: BLE001 - 刷新失败只记录, 不能打死刷新线程
                 logger.error(f"刷新SMTC信息失败: {e.__class__.__name__}: {e}", exc_info=True)
 
+    def _periodic_poll(self):
+        """定时轮询兜底: 部分播放器几乎不发事件 (网易云只发 media_properties_changed),
+        用轻量快照保证切歌 / 播放状态 / 单曲循环能及时更新。
+        """
+        if not self._running:
+            return
+        has_source = getattr(self._source, "has_source", None)
+        if callable(has_source) and not has_source():
+            return
+        snapshot = self._source.snapshot(include_thumbnail=False)
+        if snapshot is None or not snapshot.is_valid:
+            return
+        self._sync_snapshot_progress(snapshot, verbose=False)
+
     def _refresh_timeline(self):
         """只同步进度/播放状态 (不联网, 不重新读封面)"""
         snapshot = self._source.snapshot(include_thumbnail=False)
         if snapshot is None or not snapshot.is_valid:
             return
-        self._host.set_playback_status(snapshot.playback_status)
+        self._sync_snapshot_progress(snapshot, verbose=True)
+
+    def _sync_snapshot_progress(self, snapshot: SourceSnapshot, verbose: bool = False):
+        """用轻量快照同步歌曲变化 / 播放状态 / 进度 (事件与定时轮询共用)。
+
+        歌曲信息变化时升级为完整刷新 (读封面、走缓存/联网); 否则只同步状态与进度。
+        这样即使播放器只发进度事件 (或几乎不发事件), 也能发现切歌。
+        """
+        if self._last_music is None or snapshot.unique_key() != self._last_source_key:
+            self._refresh(force=False)
+            return
+        if verbose:
+            logger.debug(f"源SMTC进度: {snapshot.title!r} 状态={snapshot.playback_status} "
+                         f"进度={snapshot.timeline_position:.2f}/{snapshot.timeline_end:.2f}s")
+        if snapshot.playback_status != self._last_playback_status:
+            self._last_playback_status = snapshot.playback_status
+            self._host.set_playback_status(snapshot.playback_status)
         timeline = self._timeline_of(snapshot)
         if timeline is not None:
             self._host.update_timeline(*timeline)
+        else:
+            # 源平台不提供进度 (例如酷狗/网易云): 单曲循环没有"进度回退"事件, 主动检测重置
+            self._maybe_reset_loop_progress(snapshot)
+
+    def _maybe_reset_loop_progress(self, snapshot: SourceSnapshot) -> bool:
+        """源平台不提供进度时, 检测单曲循环/重新播放并把托管进度重置到开头。
+
+        判断条件: 源状态仍是 playing, 且托管进度已到结尾附近 (``LOOP_END_MARGIN`` 内)。
+        单曲循环时源 SMTC 的信息/状态事件会在同一首歌上再次触发, 而自托管进度已经停在
+        结尾; 此时重置计时基准, 让进度条从 0 重新走。
+        """
+        if snapshot.playback_status != "playing":
+            return False
+        restart = getattr(self._host, "restart_progress", None)
+        if not callable(restart):
+            return False
+        try:
+            end = float(getattr(self._host, "timeline_end", 0.0) or 0.0)
+            position = float(getattr(self._host, "timeline_position", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return False
+        if end <= 0.0 or position < end - LOOP_END_MARGIN:
+            return False
+        restart(0.0)
+        logger.info(f"检测到单曲循环/重新播放, 重置SMTC进度: {snapshot.title} - {snapshot.artist}")
+        return True
 
     def _refresh(self, force: bool = False):
         """完整刷新: 读源会话信息 -> 后端解析 -> 写托管会话"""
@@ -512,12 +585,19 @@ class Plugin(BasePlugin):
         source_info = snapshot.to_music_info()
         timeline = self._timeline_of(snapshot)
         source_key = snapshot.unique_key()
+        logger.debug(f"源SMTC信息: {snapshot.title!r} - {snapshot.artist!r} | "
+                     f"专辑: {snapshot.album_title!r} | 状态: {snapshot.playback_status} | "
+                     f"进度: {snapshot.timeline_position:.2f}/{snapshot.timeline_end:.2f}s")
 
         # 同一首歌: 只更新播放状态/进度, 不联网
         if not force and source_key == self._last_source_key and self._last_music is not None:
+            self._last_playback_status = snapshot.playback_status
             self._host.set_playback_status(snapshot.playback_status)
             if timeline is not None:
                 self._host.update_timeline(*timeline)
+            else:
+                # 源平台不提供进度: 检测单曲循环并重置托管进度
+                self._maybe_reset_loop_progress(snapshot)
             return
 
         info, cover = self._resolve_music(snapshot, source_info, force)
@@ -533,6 +613,7 @@ class Plugin(BasePlugin):
                           duration=duration, source_timeline=timeline)
         self._last_source_key = source_key
         self._last_music = display
+        self._last_playback_status = snapshot.playback_status
         if cover is not None:
             logger.info(f"更新SMTC信息: {display.title} - {display.artist} "
                         f"(专辑: {display.album_title or '-'}; 封面: {cover.width}x{cover.height})")
@@ -591,6 +672,7 @@ class Plugin(BasePlugin):
         """没有可用源会话时显示默认信息"""
         self._last_source_key = ""
         self._last_music = None
+        self._last_playback_status = "stopped"
         if self._host is None:
             return
         self._host.display_default()

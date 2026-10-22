@@ -199,13 +199,20 @@ class BaseMusicBackend(ABC):
 
 ## 8. `platform/netease.py`
 
-* 复用旧实现：搜索 `music.163.com/api/search/get/web`、详情
-  `api/song/detail`（v3 兜底）、封面 `album.picUrl + "?param={size}y{size}"`（最大封面不加参数）、
-  含 Referer 的请求头、详情按 id 内存缓存。
+* 复用旧实现：搜索、详情 `api/song/detail`（v3 兜底）、封面
+  `album.picUrl + "?param={size}y{size}"`（最大封面不加参数）、含 Referer 的请求头、
+  详情按 id 内存缓存。
+* 搜索入口（全是 music.163.com 官方匿名接口，按顺序兜底）：
+  1. `/api/search/get/web`（主接口，实测高频时会返回 405 "操作频繁"）；
+  2. `/api/search/get`（主接口被限流时仍可用）；
+  3. `POST /api/cloudsearch/pc`（网页搜索接口，最后兜底）。
+  只有全部入口都被限流时才抛 `NeteaseRateLimit`。
 * 类：`NeteaseMusicBackend`，`platform_id="netease"`、`cache_name="netease"`、
   `source_markers=("netease","cloudmusic")`。
 * `search()`：关键字变体循环 + `artist_matches` 过滤，歌名完全一致优先；`cover_ref` 存歌曲 id。
 * `resolve_cover_url()`：按 id 查详情取 `album.picUrl` 后拼尺寸参数。
+* **限流冷却**：三个官方入口都返回 HTTP 200 + `{"code":405,"msg":"操作频繁，请稍候再试"}` 时，
+  后端进入 20s 冷却期（期间不联网搜索，直接用缓存/源封面），避免短歌曲循环反复触发。
 
 ## 8.5 `platform/qqmusic.py`（QQ音乐，官方匿名接口）
 
@@ -264,8 +271,10 @@ class SourceSMTC:
 
 行为：worker 上获取 `SessionManager` 并注册 `add_sessions_changed`；会话列表/播放信息变化时
 在 worker 重新校验（不在列表或 title/artist 全空 → 失效、注销旧事件、按模式重选、通知）；
-有效时注册 `playback_info_changed` / `timeline_properties_changed`（回调只投递）。
-`auto` 模式优先保持上次平台类型。同步接口 5s 超时；`stop()` 后不再访问 WinRT。
+有效时注册 `media_properties_changed` / `playback_info_changed` / `timeline_properties_changed`
+（回调只投递）。其中 `media_properties_changed` 是切歌的关键事件：**网易云只发这个事件**，
+不注册它就会"手动刷新能拿到新歌、自动却不响应"。`auto` 模式优先保持上次平台类型；
+同步接口 5s 超时；`stop()` 后不再访问 WinRT。
 
 ## 10. `smtc_host.py`
 
@@ -280,8 +289,10 @@ class SMTCHost:
     update(info, cover, playback_status, *, duration=0.0, source_timeline=None)
     update_timeline(start, position, end)
     set_playback_status(status)
+    restart_progress(position=0.0)        # 单曲循环/重新播放时重置进度
     display_default()
     playback_status -> str
+    timeline_position / timeline_end -> float   # 只读缓存值, 供 main 检测循环
 ```
 
 行为：worker 内创建 `MediaPlayer` + SMTC，设置 app_media_id / type / 按钮使能；`update` 写四字段
@@ -290,12 +301,22 @@ class SMTCHost:
 计时器推进（换歌重置、暂停冻结、每 ~0.5s 写回），否则写静态 (0,0,duration)。线程懒启动、
 `destroy()` 退出，支持反复启停。
 
+**单曲循环进度重置**：源平台不提供进度时（例如酷狗 SMTC 的 timeline 全为 0），单曲循环不会产生
+"进度回退"事件，自托管进度会停在结尾。main 在收到同一首歌的进度/信息事件时检查「状态仍为
+playing 且托管进度位于结尾 `LOOP_END_MARGIN`(1.5s) 内」，调用
+`SMTCHost.restart_progress(0)` 重置计时基准；源平台提供进度时仍以镜像源进度为准。
+
 ## 11. `main.py`
 
 * `PluginConfig(ModuleConfigPlus)`：17 项配置（见第 12 节），help_string 说明用途。
 * `Plugin(BasePlugin)`：持有 SourceSMTC / SMTCHost / 三个后端 / 生命周期线程 / 刷新线程；
   启动、停止、配置更新、刷新（含 force）、清缓存（进度对话框）、安装快捷方式。
 * 源事件回调只投递刷新请求；刷新线程防抖合并（0.15s），同一首歌只同步状态/进度。
+* **定时轮询兜底**（`PERIODIC_POLL_INTERVAL = 1.0s`）：刷新线程在没有事件时用轻量快照轮询，
+  发现歌曲变化就升级为完整刷新；照顾几乎不发事件的播放器（网易云只发 media 事件、
+  或不提供 timeline 的平台），同时也可用轮询触发单曲循环重置。
+* 轻量路径（进度事件 / 轮询）会先比较快照 `unique_key`：歌曲变了走完整刷新，否则只同步
+  播放状态与进度。
 * 后端顺序：搜索平台（auto=源平台）→ 其他平台（允许跨平台时）；都失败回退源缩略图。
 * 「立即更新信息」：`force_refresh=True` 跳过全部缓存联网取；「清除缓存」后也会 force 刷新。
 * 配置更新：字段指向/尺寸/搜索平台等清掉上一次歌曲缓存并重新解析；需要操作源会话的部分
@@ -341,6 +362,12 @@ class SMTCHost:
 * QQ 后端只使用腾讯官方匿名接口（搜索 `c.y.qq.com` / 备用 `u.y.qq.com`，封面 `y.gtimg.cn`），
   不需要 cookie / 登录 / 第三方 API / 本地服务；失败自动降级。
 * 配置变更中需要操作源会话的部分在生命周期线程异步执行；字段指向等变化会立即重新解析。
+* 单曲循环：源平台不提供进度（酷狗/网易云 timeline 全 0）时自托管进度停在结尾，main 在结尾附近
+  再次收到同歌播放事件时调用 `SMTCHost.restart_progress()` 重置；源提供进度时以镜像为准。
+* 网易云切歌只触发 `media_properties_changed`（不触发 playback/timeline 事件），source 模块已
+  注册该事件；另外 main 的 1s 轮询作为兜底，即使事件注册失败也能发现切歌。
+* 网易云搜索接口高频请求会返回 405 "操作频繁"：先自动切到另外两个官方搜索入口，
+  全部入口都限流时才进入 20s 冷却（不联网，用缓存/源封面），避免短歌曲循环反复触发。
 * 缓存写入失败（超长路径等）不阻断高清封面显示；封面/歌名文件名每段截断到 60 字符。
 
 ### 14.2 实测结果（Windows 10/11 + Python 3.10.9）
@@ -351,9 +378,17 @@ class SMTCHost:
 | 酷狗+网易云真实联网 | 27/27（STOP、起风了；二次零网络；最大封面；专辑兜底） |
 | QQ音乐后端 | 44/44（官方网页搜索高频无限流；封面预设/原图；缓存零网络；相似度；备用接口 2001 重试与降级；main 注册/选路/真实解析） |
 | 多歌手回归（本次问题） | 17/17（`千秋岁 - 塞壬唱片-MSR/Erik Couttolenc/VISION SOUND/Vapestor`：三平台均解析出 `辞岁行OST` 480 封面；源专辑为空时三平台相似度也命中） |
+| 单曲循环进度重置 | 14/14（源无进度的自托管场景：结尾播放时重置、中段/暂停不误触、源有进度时走镜像；真实 SMTCHost 重置后从 0 继续推进、暂停冻结、镜像模式重置） |
 | main.py 编排集成 | 32/32（优先级/跨平台/字段映射/force/同歌跳过/进度/配置即时生效） |
 | 加载器导入 + 配置编辑器 | 17/17（相对路径也能移出 sys.path、标准库 platform 未污染、17 项配置可读写、lnk 可生成） |
 | 真实端到端 / 启停重启 | 8/8、9/9（真实酷狗 SMTC 解析并写托管会话；两轮 start/stop 线程归零） |
+| 源会话事件注册 | 11/11（media/playback/timeline 三事件注册与注销、平台不支持 media 事件时不影响其它事件、回调只投递命令） |
+| 定时轮询兜底 | 8/8（无事件时发现首歌/切歌、同歌不重复联网、状态同步、循环重置、停止后不轮询） |
+| 网易云真实列表循环 | 4/4（两首 5s 歌曲来回循环，22s 内自动更新 4 次，无需手动刷新；实测网易云只发 media_properties_changed） |
+| 网易云限流处理 | 7/7（识别 HTTP 200 + code 405 "操作频繁"、多入口兜底、20s 冷却内不重复联网、冷却后恢复搜索） |
+
+> 注：最后一次全量回归（236 项）期间，网易云主搜索入口 `/api/search/get/web` 正处于 405 限流，
+> live / 多歌手测试是通过备用官方入口 `/api/search/get` 完成并全部通过的，验证了限流兜底确实生效。
 
 ### 14.3 已知取舍与风险
 
@@ -368,6 +403,9 @@ class SMTCHost:
   ≤3000px 实测 <1s。
 * **相似度阈值 0.85**：同图约 0.999、无关图约 0.5；可在配置关闭。
 * **QQ 官方接口为未公开文档的内部接口**，可能限流/变化；失败时自动回退，不影响其它平台。
+* **网易云搜索接口高频请求会 405 "操作频繁"**：先自动切换 `/api/search/get` 与
+  `POST /api/cloudsearch/pc` 两个官方备用入口；全部限流时才进入 20s 冷却（期间用缓存/源封面）。
+  正常情况下同一首歌第二次播放会直接命中缓存，不会持续触发。
 * **QQ 封面 CDN 预设尺寸限制**：只提供 90/120/150/180/300/500/800/1200，配置尺寸向上取预设，
   最大封面用原图。
 * **清缓存后**会立即 force 刷新当前歌曲并重新联网缓存（预期行为）。

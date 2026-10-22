@@ -296,7 +296,7 @@ class QqMusicBackend(BaseMusicBackend):
                     continue
                 dedupe_key = (text_key(candidate.info.title), candidate.cover_ref,
                               int(candidate.info.length * 1000))
-                if dedupe_key in seen:
+                if dedupe_key in seen:  # 去重
                     continue
                 seen.add(dedupe_key)
                 candidates.append(candidate)

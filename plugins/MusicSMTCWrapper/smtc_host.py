@@ -218,6 +218,17 @@ class SMTCHost:
         self._source_status = normalized
         self._call_sync(self._cmd_set_playback_status, normalized)
 
+    def restart_progress(self, position: float = 0.0) -> None:
+        """把托管会话进度重置到开头 (单曲循环 / 重新播放时用)。
+
+        * 自托管模式: 重置计时基准, 从 ``position`` 重新推进;
+        * 镜像模式: 立即写入 ``(0, position, end)`` (之后源进度事件仍会覆盖)。
+
+        源平台不提供进度 (例如酷狗) 时, 单曲循环不会产生"进度回退"事件,
+        需要 main 在检测到同一首歌重新开始时调用本方法。
+        """
+        self._call_sync(self._cmd_restart_progress, float(position))
+
     def display_default(self) -> None:
         """无源会话时写入默认信息 (:data:`DEFAULT_MUSIC`), 并复位状态/进度。"""
         self._call_sync(self._cmd_display_default)
@@ -227,6 +238,16 @@ class SMTCHost:
     def playback_status(self) -> str:
         """当前托管会话的播放状态 (小写枚举名, 如 ``"playing"``)。"""
         return self._playback_status
+
+    @property
+    def timeline_position(self) -> float:
+        """当前托管会话的进度位置 (秒; 只读 worker 缓存值, 不做 WinRT 调用)。"""
+        return self._timeline_position
+
+    @property
+    def timeline_end(self) -> float:
+        """当前托管会话的总时长/终点 (秒; 0 表示未知, 只读缓存值)。"""
+        return self._timeline_end
 
     def _timeline_state(self) -> dict[str, Any]:
         """内部进度状态快照 (自测 / 调试用; 不做 WinRT 调用)。"""
@@ -553,6 +574,34 @@ class SMTCHost:
             logger.debug("忽略无效的源进度: start=%s position=%s end=%s", start, position, end)
             return
         self._apply_source_timeline(*timeline)
+
+    def _cmd_restart_progress(self, position: float) -> None:
+        """把托管进度重置到指定位置 (只在 worker 调用)。
+
+        用于源平台不提供进度、单曲循环时没有"进度回退"事件的场景。
+        """
+        if self._smtc is None:
+            logger.debug("托管 SMTC 会话未创建, 忽略进度重置")
+            return
+        end = self._timeline_end
+        try:
+            pos = float(position)
+        except (TypeError, ValueError):
+            pos = 0.0
+        pos = max(0.0, pos)
+        if end > 0.0:
+            pos = min(pos, end)
+        self._reset_self_host_state()
+        if self._self_host_progress and end > 0.0:
+            # 自托管模式: 从新位置重新计时
+            self._self_host_active = True
+            self._self_host_playing = self._source_status == "playing"
+            self._self_host_base = pos
+            self._self_host_ref = time.monotonic()
+            self._self_host_last_write = time.monotonic()
+        self._timeline_position = pos
+        self._write_timeline(0.0, pos, end)
+        logger.info(f"托管SMTC进度已重置: position={pos:.2f}s end={end:.2f}s")
 
     def _cmd_set_playback_status(self, status: str) -> None:
         """轻量播放状态更新 (只在 worker 调用)"""
