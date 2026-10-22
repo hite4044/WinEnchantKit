@@ -136,6 +136,8 @@ class PluginConfig(ModuleConfigPlus):
 
     def __init__(self):
         super().__init__()
+        self.tip1: TipParam | str = TipParam("插件启用后如果仍然不显示高清封面, 请点击任务栏的音量和网络图标处")
+        self.tip2: TipParam = TipParam("按箭头按钮切换SMTC会话, 直到找到本插件的SMTC会话 (SMTCWrapper)")
         self.source_platform: ChoiceParamPlus | str = ChoiceParamPlus(
             PLATFORM_AUTO, SOURCE_PLATFORM_CHOICES, "源SMTC平台"
         ).set_help("控制歌曲信息从哪个SMTC会话获取。\n"
