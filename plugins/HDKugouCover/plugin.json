@@ -5,7 +5,7 @@
   "version": "1.2.0",
   "main_file": "main.py",
   "main_class": "Plugin",
-  "desc": "通过新建SMTC会话, 让你的WallpaperEngine能够使用更高清的封面!",
+  "desc": "旧版: 通过新建SMTC会话, 让你的WallpaperEngine能够使用更高清的封面!",
   "requirements": {
     "winsdk": "",
     "pylnk3": ""
