@@ -83,7 +83,7 @@ def hide_background_window(main_kugou: int):
 
 def blur_behind(hwnd: int, color: tuple[int, int, int, int],
                 cfg: dict[str, Any]) -> str | None:
-    set_back_type = cfg["set_back_type"]
+    set_back_type = False  # cfg["set_back_type"]
     enable_blur_behind = cfg["enable_blur_behind"]
 
     back_type = cfg["back_type"]
