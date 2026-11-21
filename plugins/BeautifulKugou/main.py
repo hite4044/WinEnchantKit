@@ -83,7 +83,7 @@ def hide_background_window(main_kugou: int):
 
 def blur_behind(hwnd: int, color: tuple[int, int, int, int],
                 cfg: dict[str, Any]) -> str | None:
-    set_back_type = False  # cfg["set_back_type"]
+    set_back_type = cfg["set_back_type"]
     enable_blur_behind = cfg["enable_blur_behind"]
 
     back_type = cfg["back_type"]
@@ -152,7 +152,7 @@ class Plugin(BasePlugin):
             "accent_color": ColorParam((0, 128, 255), "模糊背景颜色"),
             "accent_alpha": IntParam(40, "模糊背景透明度"),
 
-            "enable_round_corner": BoolParam(True, "启用窗口圆角 (Win 11 22000+)"),
+            "enable_round_corner": BoolParam(True, "启用窗口圆角 (Win11 22000+)"),
             "corner_type": ChoiceParamPlus(DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUND,
                                            {
                                                DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_DEFAULT: "默认",
@@ -163,7 +163,8 @@ class Plugin(BasePlugin):
 
             "enable_blur_behind": BoolParam(False, "启用窗口背景模糊 (颜色加深)"),
 
-            "set_back_type": BoolParam(False, "设置背景材质 (Win 11 22621+) (无效)"),
+            "set_back_type": BoolParam(False, "设置背景材质 (Win11 22621+) (慎用)")\
+                .set_help("在酷狗窗口启用，会造成窗口背景发白无法正常显示"),
             "back_type": ChoiceParamPlus(DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW,
                                          {
                                              DWM_SYSTEMBACKDROP_TYPE.DWMSBT_NONE: "无",

@@ -1,6 +1,6 @@
 {
   "id": "plugin_temp",
-  "name": "Hite404工具插件模版",
+  "name": "插件模版",
   "author": "hite404",
   "version": "1.0.0",
   "main_file": "main.py",
