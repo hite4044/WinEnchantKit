@@ -146,11 +146,14 @@ class ControlPanel(wx.Frame):
         self.about_dialog_btn.Bind(wx.EVT_BUTTON, self.on_about_dialog)
         self.self_config_btn.Bind(wx.EVT_BUTTON, self.on_config_self)
         self.exit_btn.Bind(wx.EVT_BUTTON, self.on_exit_gui)
-        self.plugins_lc.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_item_selected)
+        self.plugins_lc.Bind(wx.EVT_LIST_ITEM_SELECTED, self.on_selected_item_update)
+        self.plugins_lc.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.on_selected_item_update)
         self.Bind(wx.EVT_CLOSE, self.on_close_window)
 
         self.start_btn.Disable()
         self.stop_btn.Disable()
+        self.config_btn.Disable()
+        self.auto_launch_cb.Disable()
 
         set_multi_size_icon(self, "assets/icon.png", Image.Resampling.BICUBIC)
         self.create_stray_icon()
@@ -222,9 +225,6 @@ class ControlPanel(wx.Frame):
                 self.start_plugin(plugin_id)
                 info.state = PluginState.RUNNING
                 self.plugins_lc.SetItem(info.line, 2, "运行中")
-        for index in range(self.plugins_lc.GetItemCount()):
-            item: wx.ListItem = self.plugins_lc.GetItem(index)
-            self.refresh_button_state(item.GetId())
 
         if self.first_run:
             self.first_run = False
@@ -329,9 +329,17 @@ class ControlPanel(wx.Frame):
             plugin_info.main_class.update_config(plugin_info.main_class.config.copy(), config_dict)
         self.save_config()
 
-    def on_item_selected(self, event: wx.ListEvent):
-        if event.GetIndex() != -1:
+    def on_selected_item_update(self, event: wx.ListEvent):
+        if event.GetEventType() == wx.EVT_LIST_ITEM_SELECTED.typeId:
+            self.auto_launch_cb.Enable()
+            self.config_btn.Enable()
             self.refresh_button_state(event.GetIndex())
+        else:
+            self.start_btn.Disable()
+            self.stop_btn.Disable()
+            self.config_btn.Disable()
+            self.auto_launch_cb.Disable()
+
 
     def start_plugin(self, id_: str, start_before_cbk: Callable[[], None] = lambda: None) -> str | None:
         plugin_info = self.plugins[id_]
@@ -423,7 +431,10 @@ class ControlPanel(wx.Frame):
         elif info.state == PluginState.STARTING:
             self.start_btn.Disable()
             self.stop_btn.Disable()
+        ps = self.auto_launch_cb.IsEnabled()
         self.auto_launch_cb.SetValue(info.id in self.auto_launch_plugins)
+        if not ps:
+            self.auto_launch_cb.Disable()
 
     def on_close_window(self, event: wx.CloseEvent):
         if event.CanVeto():
